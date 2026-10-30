@@ -2,26 +2,17 @@ import io
 from datetime import date
 from decimal import Decimal
 
-import pandas as pd
 import pytest
 
 from app.ingest import _parse, load_gdn_file
-from app.ingest.clean import clean_str, name_key, normalize_utr, parse_amount, parse_date, split_emails
+from app.ingest.clean import clean_str, loose_name_key, name_key, normalize_utr, parse_amount, parse_date, split_emails
 from app.models import ConsolidatedEntry, Vendor
 from tests.fixtures import three_row_example as fx
-
-
-def xlsx(rows: list[dict]) -> bytes:
-    buf = io.BytesIO()
-    pd.DataFrame(rows).to_excel(buf, index=False)
-    return buf.getvalue()
+from tests.util import files_from, xlsx
 
 
 def upload_files(**override) -> dict:
-    sources = {"consolidated": fx.CONSOLIDATED_SOURCE, "bank": fx.BANK_SOURCE, "gdn": fx.GDN_SOURCE,
-               "tds": fx.TDS_SOURCE, "vendors": fx.VENDORS_SOURCE}
-    files = {k: (f"{k}.xlsx", xlsx(rows)) for k, rows in sources.items()}
-    return files | override
+    return files_from(fx) | override
 
 
 def test_parse_amount():
@@ -65,6 +56,9 @@ def test_name_key_matches_spelling_variants():
     assert name_key("6Ipain Healthcare Private Limited{6Ipnhpl}") == name_key("6IPAIN HEALTHCARE PRIVATE LIMITED")
     assert name_key("B J MADAN & CO") == name_key("B.J. Madan and Company")
     assert name_key("R.K PHARMA") != name_key("R.S PHARMA")
+    assert loose_name_key("PHARMAGIX") == loose_name_key("Pharmagix(A Unit Of White Pharmaceuticals)")
+    assert loose_name_key("AARK PHARMACEUTICALS PRIVATE LIMITED") == loose_name_key("Aark Pharmaceuticals")
+    assert loose_name_key("M/S VALTURE PHARMACEUTICAL LLP") == loose_name_key("Valture Pharmaceutical")
 
 
 def test_vendors_contact_2_is_mailed_and_variants_dedupe():

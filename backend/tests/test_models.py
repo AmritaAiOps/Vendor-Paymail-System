@@ -1,22 +1,41 @@
+from datetime import date
+
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.config import get_setting, set_setting
-from app.models import AuditLog, EmailHistory, EmailItem, ReconciliationResult
+from app.models import AuditLog, EmailHistory, EmailItem, EmailQueue, ReconciliationResult, Vendor
 from scripts.seed_fixture import seed
 
 
-def test_duplicate_utr_rejected(db):
-    db.add(EmailItem(email_queue_id=1, reconciliation_result_id=1, utr="DLXBH00018402789"))
+def _queue(db) -> tuple[EmailQueue, list[ReconciliationResult]]:
+    """Real parent rows (foreign keys are enforced): the seeded fixture's results plus one queued email."""
+    seed(db)
+    queue = EmailQueue(vendor_id=db.scalar(select(Vendor.id)), send_on_date=date(2025, 9, 15))
+    db.add(queue)
     db.commit()
-    db.add(EmailItem(email_queue_id=2, reconciliation_result_id=2, utr="DLXBH00018402789"))
-    with pytest.raises(IntegrityError):
+    return queue, list(db.scalars(select(ReconciliationResult)))
+
+
+def test_duplicate_utr_rejected(db):
+    queue, results = _queue(db)
+    db.add(EmailItem(email_queue_id=queue.id, reconciliation_result_id=results[0].id, utr="DLXBH00018402789"))
+    db.commit()
+    db.add(EmailItem(email_queue_id=queue.id, reconciliation_result_id=results[1].id, utr="DLXBH00018402789"))
+    with pytest.raises(IntegrityError, match="UNIQUE"):
+        db.commit()
+
+
+def test_foreign_keys_are_enforced(db):
+    db.add(EmailItem(email_queue_id=999, reconciliation_result_id=999, utr="U1"))  # no such queue or result
+    with pytest.raises(IntegrityError, match="FOREIGN KEY"):
         db.commit()
 
 
 def test_bounced_is_an_allowed_exception_type(db):
-    db.add(ReconciliationResult(consolidated_entry_id=1, invoice_value=1, status="EXCEPTION", exception_type="BOUNCED"))
+    _, results = _queue(db)
+    results[0].status, results[0].exception_type = "EXCEPTION", "BOUNCED"
     db.add(EmailHistory(vendor_name="X", status="NOT_SENT", not_sent_reason="BOUNCED"))
     db.commit()
     with pytest.raises(IntegrityError, match="CHECK"):

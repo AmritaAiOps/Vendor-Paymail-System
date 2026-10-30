@@ -67,6 +67,11 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        if connection.dialect.name == "sqlite":
+            # batch mode rebuilds tables (copy, drop, rename); with foreign keys on, the drop fails or cascades.
+            # Must run outside a transaction to take effect, hence before begin_transaction.
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            connection.commit()
         context.configure(
             connection=connection, target_metadata=target_metadata,
             render_as_batch=True,  # SQLite needs batch mode for ALTER

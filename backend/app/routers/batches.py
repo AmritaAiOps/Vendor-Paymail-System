@@ -1,6 +1,6 @@
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,7 @@ from app.contract import ResultStatus
 from app.ingest import FILE_KINDS, FileError, ingest_batch
 from app.ingest.clean import clean_str
 from app.models import ConsolidatedEntry, ReconciliationResult, UploadBatch, get_db
-from app.routers import STUB, canned_batch, canned_results
+from app.reconcile import reconcile_batch
 from app.schemas import BatchOut, BatchSummary, ResultOut
 
 router = APIRouter(prefix="/batches", tags=["batches"])
@@ -51,11 +51,16 @@ def upload(consolidated: UploadFile, bank: UploadFile, gdn: UploadFile, tds: Upl
     raise HTTPException(422, problems)
 
 
-@router.get("/{id}/summary", response_model=BatchSummary)
-def summary(id: int, db: Session = Depends(get_db)):
+def _batch(db: Session, id: int) -> UploadBatch:
     batch = db.get(UploadBatch, id)
     if batch is None:
         raise HTTPException(404, "Batch not found")
+    return batch
+
+
+@router.get("/{id}/summary", response_model=BatchSummary)
+def summary(id: int, db: Session = Depends(get_db)):
+    batch = _batch(db, id)
     counts = {s: 0 for s in ResultStatus}
     counts.update(db.execute(
         select(ReconciliationResult.status, func.count())
@@ -66,14 +71,30 @@ def summary(id: int, db: Session = Depends(get_db)):
                         files=batch.ingest_report or {})
 
 
-@router.post("/{id}/reconcile", response_model=BatchSummary, dependencies=[STUB])
-def reconcile(id: int):
-    counts = {s: 0 for s in ResultStatus}
-    for r in canned_results():
-        counts[r.status] += 1
-    return BatchSummary(batch=canned_batch().model_copy(update={"id": id}), counts=counts)
+@router.post("/{id}/reconcile", response_model=BatchSummary)
+def reconcile(id: int, db: Session = Depends(get_db)):
+    """Reconcile every invoice of the batch (re-runnable), queue the emails, return the new counts."""
+    _batch(db, id)
+    reconcile_batch(db, id)
+    return summary(id, db)
 
 
-@router.get("/{id}/results", response_model=list[ResultOut], dependencies=[STUB])
-def results(id: int):
-    return canned_results()
+@router.get("/{id}/results", response_model=list[ResultOut])
+def results(id: int, response: Response, status: ResultStatus | None = None,
+            vendor: str | None = Query(None, max_length=255, description="part of the vendor name, any case"),
+            limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
+    """One page of results in consolidated-report order. The total before paging is in the X-Total-Count header."""
+    _batch(db, id)
+    q = (select(ReconciliationResult, ConsolidatedEntry)
+         .join(ConsolidatedEntry, ConsolidatedEntry.id == ReconciliationResult.consolidated_entry_id)
+         .where(ConsolidatedEntry.batch_id == id))
+    if status:
+        q = q.where(ReconciliationResult.status == status)
+    if vendor:
+        q = q.where(func.lower(ConsolidatedEntry.vendor_name).contains(vendor.lower(), autoescape=True))
+    response.headers["X-Total-Count"] = str(db.scalar(select(func.count()).select_from(q.subquery())))
+    return [ResultOut(id=r.id, batch_id=id, vendor_name=e.vendor_name, invoice_no=e.invoice_no, utr=e.utr,
+                      invoice_value=r.invoice_value, payment_date=r.payment_date, amount_paid=r.amount_paid,
+                      tds_amount=r.tds_amount, invoice_deduction=r.invoice_deduction, reason=r.reason,
+                      status=r.status, exception_type=r.exception_type)
+            for r, e in db.execute(q.order_by(ConsolidatedEntry.id).limit(limit).offset(offset))]

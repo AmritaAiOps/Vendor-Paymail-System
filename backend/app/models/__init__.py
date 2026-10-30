@@ -2,11 +2,23 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, Enum, ForeignKey, MetaData, Numeric, String, Text, create_engine, false, func
+import sqlite3
+
+from sqlalchemy import JSON, Enum, ForeignKey, MetaData, Numeric, String, Text, create_engine, event, false, func
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from app import config
 from app.contract import BatchStatus, ExceptionType, HistoryStatus, QueueStatus, ResultStatus
+
+
+@event.listens_for(Engine, "connect")
+def _sqlite_foreign_keys(dbapi_connection, _record):
+    """SQLite ignores foreign keys unless asked, per connection; Postgres always enforces them. Same rules in dev,
+    tests and production. (alembic/env.py turns them off again for migrations, which rebuild tables.)"""
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
 
 engine = create_engine(config.DATABASE_URL)
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
@@ -115,6 +127,7 @@ class ReconciliationResult(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     consolidated_entry_id: Mapped[int] = mapped_column(ForeignKey("consolidated_entries.id"), unique=True)
     bank_txn_id: Mapped[int | None] = mapped_column(ForeignKey("bank_transactions.id"))
+    vendor_id: Mapped[int | None] = mapped_column(ForeignKey("vendors.id"), index=True)  # matched by name_key
     invoice_value: Mapped[Decimal] = mapped_column(Money)
     payment_date: Mapped[date | None]  # bank value date
     amount_paid: Mapped[Decimal | None] = mapped_column(Money)  # bank debit

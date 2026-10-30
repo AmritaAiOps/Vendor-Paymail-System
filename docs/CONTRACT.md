@@ -34,6 +34,7 @@ cd backend && .venv/Scripts/python -m pytest tests/contract -q
 - **No login.** There are no users or roles; every endpoint is open to anyone who can reach the app. Run it only on a trusted internal network.
 - Stubs: a stub route has `STUB` (from `app/routers/__init__.py`) in its dependencies and answers with header `X-Stub: true` and canned data from the fixture. The owner removes `STUB` when the route becomes real. A stub function is marked `# STUB(contract)`. Don't build on its body. Only its owner edits it.
 - Dev: the frontend's Vite dev server proxies `/api` to `http://localhost:8000`.
+- Foreign keys are enforced on SQLite too (dev and tests), exactly like Postgres: a test that inserts a row must first create the rows it points at (`scripts.seed_fixture.seed` gives a vendor, a batch and three results).
 
 ## (a) Tables: who writes, who reads
 
@@ -52,7 +53,16 @@ Data rules the screens rely on:
 
 - **Bounced payments.** A bank credit saying `NEFT RETURN-<reason>-<name>-<UTR>` marks the debit with that UTR `bank_transactions.is_bounced = true`, with the return text in `bounce_note`. Reconciliation gives that invoice `status = EXCEPTION`, `exception_type = BOUNCED`, and no email goes out. Its history row is `NOT_SENT` / `BOUNCED`. B shows BOUNCED rows **highlighted** wherever exceptions or history appear.
 - **Vendor emails.** `vendors.email` holds every valid address from "Email ID" and "Email ID- Contact 2", comma-separated; all of them are mailed. If the main Email ID cell doesn't parse cleanly, the original text is kept with `is_email_valid = false` (never guessed). A bad contact-2 cell is ignored and reported.
-- **Vendor names** match ignoring case, spaces, punctuation and Private/Pvt, Limited/Ltd, Company/Co, &/and (`ingest.clean.name_key`): `R.K PHARMA` = `R.K. Pharma`.
+- **Vendor names** match ignoring case, spaces, punctuation and Private/Pvt, Limited/Ltd, Company/Co, &/and (`ingest.clean.name_key`): `R.K PHARMA` = `R.K. Pharma`. If that finds nothing, a looser key that also drops (bracketed) text and company suffixes is tried, but only when it points at exactly one vendor: `PHARMAGIX` = `Pharmagix(A Unit Of White Pharmaceuticals)`, while a company and its CFA (`Aark Pharmaceuticals` / `Aark Pharmaceuticals (Neon Cfa)`) stay unmatched rather than guessed. The matched vendor is stored in `reconciliation_results.vendor_id`; `build_queue` uses that, not the name.
+- **Reconciliation rule** (A's `reconcile.decide`). Exceptions first, in this order: UTR not in the bank debits → `UTR_NOT_FOUND`; bounced → `BOUNCED`; no vendor → `VENDOR_NOT_FOUND`; vendor email invalid → `INVALID_EMAIL`. Then shortfall = invoice value − bank debit, with ₹1 rounding everywhere:
+  - shortfall ≤ ₹1 → `PAID_IN_FULL`
+  - shortfall = TDS (TDS file) → `TDS_ONLY`
+  - shortfall = TDS + GDN debit note(s), or = GDN alone (TDS listed but not cut) → `DEDUCTION`, reason = the GDN narration(s), joined with "; "
+  - shortfall but no debit note → `MANUAL_REVIEW` / `REASON_MISSING` (deduction amount kept for the review page)
+  - TDS > shortfall, overpaid by > ₹1, or a debit note that doesn't match the shortfall → `MANUAL_REVIEW` / `AMOUNT_MISMATCH`
+  - TDS and GDN are matched on vendor + invoice no; if the vendor is spelled differently in that file, on invoice no alone, but only when that invoice no is used by one vendor in both files.
+  - Payment date = bank value date (`reconcile.payment_date`, the one place to change it). Send date = `sending.send_on_date(payment_date)`.
+  - Only `PAID_IN_FULL`, `TDS_ONLY` and `DEDUCTION` results are sendable.
 
 ## (b) Endpoints
 
@@ -63,8 +73,8 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | GET | /api/health | A | none | HealthOut |
 | POST | /api/batches | A | multipart files: consolidated, bank, gdn, tds, vendors (.xlsx/.xls, ≤ `MAX_UPLOAD_MB` each, default 20) | 201 BatchOut; 422 `detail: [{file, message}]` listing every problem, nothing stored |
 | GET | /api/batches/{id}/summary | A | none | BatchSummary |
-| POST | /api/batches/{id}/reconcile | A | none | BatchSummary |
-| GET | /api/batches/{id}/results | A | none | list[ResultOut] |
+| POST | /api/batches/{id}/reconcile | A | none | BatchSummary; re-runnable (results already queued for email are left alone); ends by calling `build_queue(session, batch_id=id)`; 404 if no batch |
+| GET | /api/batches/{id}/results | A | query: status? (ResultStatus), vendor? (part of name, any case), limit (1–500, default 100), offset | list[ResultOut] in consolidated-report order; total before paging in header `X-Total-Count`; 404 if no batch |
 | POST | /api/scheduler/run-now | A | none | RunNowOut |
 | GET | /api/batches/{id}/proforma.xlsx | B | none | xlsx |
 | GET | /api/batches/{id}/report.xlsx | B | none | xlsx |

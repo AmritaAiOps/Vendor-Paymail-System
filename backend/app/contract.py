@@ -26,6 +26,7 @@ class ExceptionType(StrEnum):
     INVALID_EMAIL = "INVALID_EMAIL"
     REASON_MISSING = "REASON_MISSING"  # goes with ResultStatus.MANUAL_REVIEW
     BOUNCED = "BOUNCED"  # the bank returned the payment (NEFT RETURN); shown highlighted
+    AMOUNT_MISMATCH = "AMOUNT_MISMATCH"  # with MANUAL_REVIEW: TDS + GDN don't explain the shortfall, or overpaid
 
 
 class QueueStatus(StrEnum):
