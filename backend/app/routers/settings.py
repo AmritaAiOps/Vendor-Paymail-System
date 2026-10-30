@@ -4,7 +4,7 @@ from app.routers import stub
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
-EXAMPLE = {"dry_run": "true", "send_time": "10:00"}
+EXAMPLE = {"dry_run": "true", "send_time": "10:00"}  # keys/values as stored in app_settings
 
 
 @router.get("")

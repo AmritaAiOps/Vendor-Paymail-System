@@ -3,36 +3,40 @@ import inspect
 
 from sqlalchemy import Numeric
 
-from app import email_builder, history, reconcile, sending
+from app import config, email_builder, history, reconcile
 from app.main import app
 from app.models import Base
 
 TABLES = {
-    "batches": {"id", "created_at", "status", "source_files", "error"},
-    "vendors": {"id", "name", "name_key", "email"},
-    "transactions": {
-        "id", "batch_id", "utr", "vendor_name", "vendor_id", "invoice_no", "po_no", "grn_no",
-        "invoice_amount", "cheque_amount", "debit_note", "diff", "transaction_date", "payment_date",
-        "amount_paid", "tds_amount", "invoice_deduction", "reason", "due_date", "status",
-        "exception_code", "status_detail",
-    },
-    "email_attempts": {
-        "id", "created_at", "outcome", "vendor_id", "vendor_name", "to_email", "due_date",
-        "subject", "body_html", "error", "exception_code",
-    },
-    "email_attempt_items": {"id", "attempt_id", "transaction_id", "utr"},
-    "sent_utrs": {"utr", "attempt_id", "sent_at"},
-    "settings": {"key", "value"},
-    "users": {"id", "username", "password_hash"},
+    "upload_batches": {"id", "uploaded_at", "uploaded_by", "consolidated_file", "bank_file", "gdn_file", "tds_file",
+                       "vendors_file", "status", "error_message"},
+    "consolidated_entries": {"id", "batch_id", "vendor_name", "utr", "invoice_no", "po_no", "grn_no", "invoice_amount",
+                             "cheque_amount", "debit_note", "diff", "transaction_date"},
+    "bank_transactions": {"id", "batch_id", "value_date", "utr", "debit", "description", "vendor_name", "ifsc"},
+    "gdn_records": {"id", "batch_id", "vendor_name", "invoice_no", "voucher_no", "gdn_date", "amount", "reason"},
+    "tds_records": {"id", "batch_id", "vendor_name", "invoice_no", "invoice_date", "tds_amount"},
+    "vendors": {"id", "party_name", "email", "is_email_valid"},
+    "reconciliation_results": {"id", "consolidated_entry_id", "bank_txn_id", "invoice_value", "payment_date",
+                               "amount_paid", "tds_amount", "invoice_deduction", "reason", "status", "exception_type"},
+    "email_queue": {"id", "vendor_id", "send_on_date", "status", "sent_at", "subject", "body_html"},
+    "email_items": {"id", "email_queue_id", "reconciliation_result_id", "utr"},
+    "send_logs": {"id", "email_queue_id", "timestamp", "status", "error_message"},
+    "audit_log": {"id", "who", "what", "logged_at", "old_value", "new_value"},
+    "email_history": {"id", "logged_at", "batch_id", "vendor_name", "to_email", "subject", "invoice_no", "utr",
+                      "invoice_amount", "payment_date", "amount_paid", "tds_amount", "invoice_deduction", "reason",
+                      "status", "not_sent_reason", "scheduled_send_date", "sent_at", "error_message", "email_queue_id"},
+    "app_settings": {"key", "value", "updated_by", "updated_at"},
 }
 
-MONEY = {"invoice_amount", "cheque_amount", "debit_note", "diff", "amount_paid", "tds_amount", "invoice_deduction"}
+MONEY = {"invoice_amount", "cheque_amount", "debit_note", "diff", "debit", "amount", "tds_amount", "invoice_value",
+         "amount_paid", "invoice_deduction"}
 
 FUNCTIONS = {
     email_builder.build_email: "(vendor_name: str, due_date: datetime.date, rows: list[app.contract.EmailRow]) -> tuple[str, str]",
-    history.record_attempt: "(db: sqlalchemy.orm.session.Session, record: app.contract.AttemptRecord) -> int",
-    reconcile.resolve_review: "(db: sqlalchemy.orm.session.Session, transaction_id: int, reason: str) -> None",
-    sending.due_groups: "(db: sqlalchemy.orm.session.Session, on: datetime.date) -> list[app.contract.VendorGroup]",
+    history.record_attempt: "(db: sqlalchemy.orm.session.Session, record: app.contract.AttemptRecord) -> None",
+    reconcile.resolve_review: "(db: sqlalchemy.orm.session.Session, result_id: int, reason: str, who: str) -> None",
+    config.get_setting: "(db: sqlalchemy.orm.session.Session, key: str, default: str | None = None) -> str | None",
+    config.set_setting: "(db: sqlalchemy.orm.session.Session, key: str, value: str, updated_by: str) -> None",
 }
 
 ROUTES = {
@@ -44,7 +48,7 @@ ROUTES = {
     ("GET", "/api/email-queue"),
     ("GET", "/api/email-history"), ("GET", "/api/email-history/export"),
     ("GET", "/api/exceptions"),
-    ("GET", "/api/review"), ("POST", "/api/review/{transaction_id}"),
+    ("GET", "/api/review"), ("POST", "/api/review/{result_id}"),
     ("GET", "/api/reports/summary"),
     ("GET", "/api/vendors"),
     ("GET", "/api/settings"), ("PUT", "/api/settings"),
@@ -57,15 +61,15 @@ def test_tables_and_columns():
         assert cols <= set(Base.metadata.tables[name].c.keys()), (name, cols - set(Base.metadata.tables[name].c.keys()))
 
 
-def test_money_is_numeric():
-    t = Base.metadata.tables["transactions"]
-    for c in MONEY:
-        assert isinstance(t.c[c].type, Numeric) and t.c[c].type.asdecimal, c
+def test_money_is_numeric_14_2():
+    cols = [c for t in Base.metadata.tables.values() for c in t.c if c.name in MONEY]
+    assert len(cols) >= len(MONEY)
+    for c in cols:
+        assert isinstance(c.type, Numeric) and (c.type.precision, c.type.scale) == (14, 2), c
 
 
-def test_utr_unique_and_sent_utr_pk():
-    assert Base.metadata.tables["transactions"].c.utr.unique
-    assert Base.metadata.tables["sent_utrs"].c.utr.primary_key
+def test_email_items_utr_unique():
+    assert Base.metadata.tables["email_items"].c.utr.unique
 
 
 def test_function_signatures():

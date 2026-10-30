@@ -6,11 +6,17 @@ router = APIRouter(prefix="/batches", tags=["batches"])
 
 EXAMPLE = {
     "id": 1,
-    "created_at": "2026-10-30T10:00:00",
-    "status": "uploaded",
-    "source_files": {"consolidated": "c.xlsx", "bank": "b.xls", "gdn": "g.xlsx", "tds": "t.xlsx", "vendors": "v.xlsx"},
-    "error": None,
+    "uploaded_at": "2026-10-30T10:00:00",
+    "uploaded_by": "admin",
+    "consolidated_file": "c.xlsx",
+    "bank_file": "b.xls",
+    "gdn_file": "g.xlsx",
+    "tds_file": "t.xlsx",
+    "vendors_file": "v.xlsx",
+    "status": "UPLOADED",
+    "error_message": None,
 }
+COUNTS = {"PAID_IN_FULL": 0, "TDS_ONLY": 0, "DEDUCTION": 0, "EXCEPTION": 0, "MANUAL_REVIEW": 0}
 
 
 @router.post("", status_code=201)
@@ -25,4 +31,4 @@ def list_batches():
 
 @router.get("/{batch_id}")
 def get_batch(batch_id: int):
-    return stub({**EXAMPLE, "id": batch_id, "counts": {"pending": 0, "ready": 0, "exception": 0, "manual_review": 0, "emailed": 0}})
+    return stub({**EXAMPLE, "id": batch_id, "counts": COUNTS})

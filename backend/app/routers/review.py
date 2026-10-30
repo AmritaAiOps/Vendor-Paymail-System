@@ -15,6 +15,6 @@ def review_list():
     return stub([])
 
 
-@router.post("/{transaction_id}")
-def resolve(transaction_id: int, body: Resolve):
-    return stub({"id": transaction_id, "status": "ready"})
+@router.post("/{result_id}")
+def resolve(result_id: int, body: Resolve):
+    return stub({"id": result_id, "status": "DEDUCTION"})

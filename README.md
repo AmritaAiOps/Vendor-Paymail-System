@@ -12,6 +12,7 @@ cp .env.example .env
 cd backend
 py -3.11 -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt
+.venv/Scripts/alembic upgrade head
 .venv/Scripts/python -m uvicorn app.main:app --reload
 .venv/Scripts/python -m pytest -q
 ```

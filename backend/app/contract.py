@@ -1,69 +1,70 @@
 """Shared types between Person A and Person B. Frozen at foundation-v1; change only via docs/CONTRACT.md."""
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
 
-class TxnStatus(StrEnum):
-    PENDING = "pending"              # ingested, not reconciled yet
-    READY = "ready"                  # reconciled, waits for due_date
-    EXCEPTION = "exception"          # no email; see exception_code
-    MANUAL_REVIEW = "manual_review"  # deduction > 0 with no reason
-    EMAILED = "emailed"
+class BatchStatus(StrEnum):
+    UPLOADED = "UPLOADED"
+    RECONCILED = "RECONCILED"
+    FAILED = "FAILED"
 
 
-class ExceptionCode(StrEnum):
-    UTR_MISSING = "utr_missing"            # no UTR in the consolidated row
-    UTR_NOT_IN_BANK = "utr_not_in_bank"
-    VENDOR_NOT_FOUND = "vendor_not_found"
-    INVALID_EMAIL = "invalid_email"
-    REASON_MISSING = "reason_missing"      # goes with status manual_review
+class ResultStatus(StrEnum):
+    PAID_IN_FULL = "PAID_IN_FULL"
+    TDS_ONLY = "TDS_ONLY"
+    DEDUCTION = "DEDUCTION"
+    EXCEPTION = "EXCEPTION"          # no email; see exception_type
+    MANUAL_REVIEW = "MANUAL_REVIEW"  # deduction > 0 with no reason
 
 
-class Outcome(StrEnum):
-    SENT = "sent"
-    FAILED = "failed"
-    DRY_RUN = "dry_run"
-    EXCEPTION = "exception"
-    MANUAL_REVIEW = "manual_review"
+class ExceptionType(StrEnum):
+    """Why a row gets no email. Also used as email_history.not_sent_reason."""
+    UTR_NOT_FOUND = "UTR_NOT_FOUND"
+    VENDOR_NOT_FOUND = "VENDOR_NOT_FOUND"
+    INVALID_EMAIL = "INVALID_EMAIL"
+    REASON_MISSING = "REASON_MISSING"  # goes with ResultStatus.MANUAL_REVIEW
+
+
+class QueueStatus(StrEnum):
+    PENDING = "PENDING"
+    SENT = "SENT"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+
+
+class HistoryStatus(StrEnum):
+    SENT = "SENT"
+    FAILED = "FAILED"
+    DRY_RUN = "DRY_RUN"
+    NOT_SENT = "NOT_SENT"
 
 
 @dataclass(frozen=True)
 class EmailRow:
-    """One table row in the vendor email, columns in the contract order."""
+    """One invoice row, columns in the email's order. utr/payment_date/amount_paid are None only on NOT_SENT rows."""
     invoice_no: str
     invoice_amount: Decimal
-    utr: str
-    payment_date: date
-    amount_paid: Decimal
+    utr: str | None
+    payment_date: date | None
+    amount_paid: Decimal | None
     tds_amount: Decimal | None
     invoice_deduction: Decimal | None
     reason: str | None
 
 
 @dataclass(frozen=True)
-class VendorGroup:
-    """All of one vendor's transactions due on one day = one email."""
-    vendor_id: int
-    vendor_name: str
-    to_email: str
-    due_date: date
-    transaction_ids: list[int]
-    rows: list[EmailRow]
-
-
-@dataclass(frozen=True)
 class AttemptRecord:
-    """Everything history.record_attempt needs. One per attempt, sent or not."""
-    outcome: Outcome
+    """One attempt, sent or not. history.record_attempt writes one email_history row per entry in rows."""
+    status: HistoryStatus
     vendor_name: str
-    due_date: date | None
-    transaction_ids: list[int]
-    utrs: list[str]
-    vendor_id: int | None = None
+    rows: list[EmailRow]
+    batch_id: int | None = None
     to_email: str | None = None
     subject: str | None = None
-    body_html: str | None = None
-    error: str | None = None
-    exception_code: ExceptionCode | None = None
+    not_sent_reason: ExceptionType | None = None
+    scheduled_send_date: date | None = None
+    sent_at: datetime | None = None
+    error_message: str | None = None
+    email_queue_id: int | None = None
