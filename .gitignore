@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db
+.env
+backend/data/
+node_modules/
+dist/
+# real vendor/bank data, never commit
+reference files/
