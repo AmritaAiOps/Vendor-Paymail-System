@@ -1,6 +1,6 @@
-"""Shared types between Person A and Person B. Frozen at foundation-v1; change only via docs/CONTRACT.md."""
+"""Shared enums and types between Person A and Person B. Frozen at foundation-v1; change only via docs/CONTRACT.md."""
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 
@@ -25,6 +25,7 @@ class ExceptionType(StrEnum):
     VENDOR_NOT_FOUND = "VENDOR_NOT_FOUND"
     INVALID_EMAIL = "INVALID_EMAIL"
     REASON_MISSING = "REASON_MISSING"  # goes with ResultStatus.MANUAL_REVIEW
+    BOUNCED = "BOUNCED"  # the bank returned the payment (NEFT RETURN); shown highlighted
 
 
 class QueueStatus(StrEnum):
@@ -42,29 +43,11 @@ class HistoryStatus(StrEnum):
 
 
 @dataclass(frozen=True)
-class EmailRow:
-    """One invoice row, columns in the email's order. utr/payment_date/amount_paid are None only on NOT_SENT rows."""
-    invoice_no: str
-    invoice_amount: Decimal
-    utr: str | None
-    payment_date: date | None
-    amount_paid: Decimal | None
-    tds_amount: Decimal | None
-    invoice_deduction: Decimal | None
-    reason: str | None
-
-
-@dataclass(frozen=True)
-class AttemptRecord:
-    """One attempt, sent or not. history.record_attempt writes one email_history row per entry in rows."""
-    status: HistoryStatus
+class GdnRow:
+    """One parsed GDN Report row, as returned by ingest.load_gdn_file."""
     vendor_name: str
-    rows: list[EmailRow]
-    batch_id: int | None = None
-    to_email: str | None = None
-    subject: str | None = None
-    not_sent_reason: ExceptionType | None = None
-    scheduled_send_date: date | None = None
-    sent_at: datetime | None = None
-    error_message: str | None = None
-    email_queue_id: int | None = None
+    invoice_no: str | None
+    voucher_no: str | None
+    gdn_date: date | None
+    amount: Decimal | None
+    reason: str | None

@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Enum, ForeignKey, MetaData, Numeric, String, Text, create_engine, func
+from sqlalchemy import JSON, Enum, ForeignKey, MetaData, Numeric, String, Text, create_engine, false, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from app import config
@@ -40,7 +40,6 @@ class UploadBatch(Base):
     __tablename__ = "upload_batches"
     id: Mapped[int] = mapped_column(primary_key=True)
     uploaded_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    uploaded_by: Mapped[str] = mapped_column(String(64))
     consolidated_file: Mapped[str] = mapped_column(String(255))
     bank_file: Mapped[str] = mapped_column(String(255))
     gdn_file: Mapped[str] = mapped_column(String(255))
@@ -48,6 +47,7 @@ class UploadBatch(Base):
     vendors_file: Mapped[str] = mapped_column(String(255))
     status: Mapped[BatchStatus] = mapped_column(Choice(BatchStatus))
     error_message: Mapped[str | None] = mapped_column(Text)
+    ingest_report: Mapped[dict | None] = mapped_column(JSON)  # per file: row counts + rejected rows and reasons
 
 
 class ConsolidatedEntry(Base):
@@ -76,6 +76,8 @@ class BankTransaction(Base):
     description: Mapped[str | None] = mapped_column(Text)
     vendor_name: Mapped[str | None] = mapped_column(String(255), index=True)  # parsed from description
     ifsc: Mapped[str | None] = mapped_column(String(11))
+    is_bounced: Mapped[bool] = mapped_column(default=False, server_default=false())  # a NEFT RETURN credit names this UTR
+    bounce_note: Mapped[str | None] = mapped_column(Text)  # the return row's description, e.g. "PAYMENT STOPPED"
 
 
 class GdnRecord(Base):
@@ -154,7 +156,6 @@ class SendLog(Base):
 class AuditLog(Base):
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(primary_key=True)
-    who: Mapped[str] = mapped_column(String(64))
     what: Mapped[str] = mapped_column(Text)
     logged_at: Mapped[datetime] = mapped_column(server_default=func.now())
     old_value: Mapped[str | None] = mapped_column(Text)
@@ -190,5 +191,4 @@ class AppSetting(Base):
     __tablename__ = "app_settings"
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
-    updated_by: Mapped[str] = mapped_column(String(64))
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())

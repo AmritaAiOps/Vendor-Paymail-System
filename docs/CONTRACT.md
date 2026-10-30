@@ -1,125 +1,139 @@
 # Contract: Person A (Engine) ↔ Person B (Delivery)
 
-Frozen at tag `foundation-v1`. Any change: stop, write it up, both people agree, update this file **and** `backend/tests/test_contract.py` in the same commit. Nobody changes it silently.
+Frozen at tag `foundation-v1`. Any change: stop, write it up, both people agree, then update this file, `backend/app/schemas.py` / `contract.py` and the stubs in the same commit. Nobody changes it silently.
 
-Enforced by `backend/tests/test_contract.py`. Run it before calling any phase finished:
+The Pydantic models in `backend/app/schemas.py` are this contract in code. `backend/tests/contract/test_contract.py` reads the endpoint table (b) and the function table (c) **from this file** and checks them against the running app. Both people run it before finishing any phase and again after the merge:
 
 ```
-cd backend && .venv/Scripts/python -m pytest tests/test_contract.py -q
+cd backend && .venv/Scripts/python -m pytest tests/contract -q
 ```
 
-## 1. Ownership
+## Folder ownership
 
 | Path | Owner |
 |---|---|
 | `backend/app/models`, `backend/alembic` (only A writes migrations, one head) | A |
-| `backend/app/ingest`, `reconcile`, `sending`, `auth`, `middleware`, `config.py` | A |
-| `backend/app/routers/`: `health`, `batches`, `reconcile`, `scheduler`, `auth` | A |
+| `backend/app/ingest`, `reconcile`, `sending`, `middleware`, `config.py`, `backend/scripts` | A |
+| `backend/app/routers/`: `health`, `batches`, `scheduler` | A |
 | `deploy/`, `docker-compose.prod.yml` | A |
 | `backend/app/email_builder`, `history`, `reports` | B |
-| `backend/app/routers/`: `email_queue`, `email_history`, `exceptions`, `review`, `reports`, `vendors`, `settings` | B |
+| `backend/app/routers/`: `reports`, `email_queue`, `email_history`, `exceptions`, `manual_review`, `vendors`, `settings` | B |
 | `frontend/` | B |
 | `.env.example`, `backend/requirements.txt` | Each person edits only their own `# --- A ---` / `# --- B ---` block |
-| `backend/app/main.py`, `backend/app/contract.py`, `backend/app/routers/__init__.py`, this file, `test_contract.py` | Shared, frozen |
+| `backend/app/main.py`, `contract.py`, `schemas.py`, `routers/__init__.py`, `backend/tests/contract/`, `backend/tests/fixtures/`, this file | Shared, frozen |
 
-Each person writes tests for their own code under `backend/tests/`.
+`.github/CODEOWNERS` mirrors this table.
 
-## 2. Conventions
+## Conventions
 
 - **Money** is `Decimal` in Python, `NUMERIC(14,2)` in the DB, and a **string** in JSON (`"545060.00"`). Never float.
 - Dates are ISO `YYYY-MM-DD`; datetimes are ISO 8601. Business timezone is `Asia/Kolkata` (`config.TIMEZONE`).
-- Enum values are the UPPERCASE strings in `app/contract.py`. In the DB they are VARCHAR with a CHECK constraint, not native PG enums.
+- Enum values are the UPPERCASE strings in `app/contract.py`. In the DB they are VARCHAR with a CHECK constraint.
+- In API responses, NULL means the cell doesn't apply. The email renders it as an empty cell, never as "0", "n/a" or "No deduction".
 - Errors use FastAPI's default `{"detail": ...}` with a proper 4xx/5xx status.
-- All endpoints live under `/api`. Everything except `GET /api/health` and `POST /api/auth/login` requires auth, using a session cookie. The frontend sends `credentials: "include"`.
-- Dev: the frontend's Vite dev server proxies `/api` to `http://localhost:8000`, so no CORS setup is needed.
-- A stub endpoint returns header `X-Stub: true` with an example of the real shape. The owner removes the header when making the endpoint real.
-- A stub function is marked `# STUB(contract)` and raises `NotImplementedError`. Don't build on its body. Only its owner edits it.
+- **No login.** There are no users or roles; every endpoint is open to anyone who can reach the app. Run it only on a trusted internal network.
+- Stubs: a stub route has `STUB` (from `app/routers/__init__.py`) in its dependencies and answers with header `X-Stub: true` and canned data from the fixture. The owner removes `STUB` when the route becomes real. A stub function is marked `# STUB(contract)`. Don't build on its body. Only its owner edits it.
+- Dev: the frontend's Vite dev server proxies `/api` to `http://localhost:8000`.
 
-## 3. Tables (`backend/app/models/__init__.py`)
+## (a) Tables: who writes, who reads
 
-Money columns marked $ are NUMERIC(14,2).
-
-| Table | Columns | Notes |
+| Table | Writes | Reads |
 |---|---|---|
-| `upload_batches` | id, uploaded_at, uploaded_by, consolidated_file, bank_file, gdn_file, tds_file, vendors_file, status, error_message | status `BatchStatus`: UPLOADED \| RECONCILED \| FAILED |
-| `consolidated_entries` | id, batch_id, vendor_name, utr, invoice_no, po_no, grn_no, invoice_amount$, cheque_amount$, debit_note$, diff$, transaction_date | utr is NULL on rows with no UTR |
-| `bank_transactions` | id, batch_id, value_date, utr, debit$, description, vendor_name, ifsc | Debit side only. vendor_name and ifsc are parsed from description |
-| `gdn_records` | id, batch_id, vendor_name, invoice_no, voucher_no, gdn_date, amount$, reason | invoice_no = vendor invoice (`Voucher Ref. No.`), reason = `Narration` |
-| `tds_records` | id, batch_id, vendor_name, invoice_no, invoice_date, tds_amount$ | |
-| `vendors` | id, party_name (unique), email, is_email_valid | email is a comma-separated list |
-| `reconciliation_results` | id, consolidated_entry_id (unique), bank_txn_id, invoice_value$, payment_date, amount_paid$, tds_amount$, invoice_deduction$, reason, status, exception_type | status `ResultStatus`: PAID_IN_FULL \| TDS_ONLY \| DEDUCTION \| EXCEPTION \| MANUAL_REVIEW. exception_type `ExceptionType`. NULL = cell doesn't apply |
-| `email_queue` | id, vendor_id, send_on_date, status, sent_at, subject, body_html | One row per vendor + send_on_date. status `QueueStatus`: PENDING \| SENT \| FAILED \| SKIPPED |
-| `email_items` | id, email_queue_id, reconciliation_result_id, **utr (unique)** | The UNIQUE on utr is the never-emailed-twice guarantee |
-| `send_logs` | id, email_queue_id, timestamp, status, error_message | status `HistoryStatus` |
-| `audit_log` | id, who, what, logged_at, old_value, new_value | |
-| `email_history` | id, logged_at, batch_id, vendor_name, to_email, subject, invoice_no, utr, invoice_amount$, payment_date, amount_paid$, tds_amount$, invoice_deduction$, reason, status, not_sent_reason, scheduled_send_date, sent_at, error_message, email_queue_id | One row per invoice per outcome. **Append-only: DB triggers reject UPDATE and DELETE.** status `HistoryStatus`: SENT \| FAILED \| DRY_RUN \| NOT_SENT. not_sent_reason `ExceptionType` |
-| `app_settings` | key (PK), value, updated_by, updated_at | Read and written **only** through `config.get_setting` / `config.set_setting`. Known keys: `dry_run` (`"true"`/`"false"`), `send_time` (`"HH:MM"` IST) |
+| `upload_batches`, `consolidated_entries`, `bank_transactions`, `gdn_records`, `tds_records`, `reconciliation_results`, `send_logs` | A | B |
+| `vendors` | A creates rows on upload. B writes only `email` and `is_email_valid` (the email fix) | A, B |
+| `email_queue`, `email_items` | B creates rows (`build_queue`). A updates only `email_queue.status` and `sent_at` | A, B |
+| `email_history` | A only, through one writer function. Append-only: DB triggers reject UPDATE and DELETE | B reads and exports |
+| `audit_log` | A and B, append only | A, B |
+| `app_settings` | Only through `config.get_setting` / `config.set_setting` | Same |
 
-`ExceptionType`: UTR_NOT_FOUND \| VENDOR_NOT_FOUND \| INVALID_EMAIL \| REASON_MISSING. REASON_MISSING goes with status MANUAL_REVIEW.
+`email_items.utr` is UNIQUE: that constraint is the never-emailed-twice guarantee. Columns are in `backend/app/models/__init__.py`.
 
-## 4. Functions across the boundary (`backend/app/contract.py` holds the types)
+Data rules the screens rely on:
 
-**B provides, A calls:**
+- **Bounced payments.** A bank credit saying `NEFT RETURN-<reason>-<name>-<UTR>` marks the debit with that UTR `bank_transactions.is_bounced = true`, with the return text in `bounce_note`. Reconciliation gives that invoice `status = EXCEPTION`, `exception_type = BOUNCED`, and no email goes out. Its history row is `NOT_SENT` / `BOUNCED`. B shows BOUNCED rows **highlighted** wherever exceptions or history appear.
+- **Vendor emails.** `vendors.email` holds every valid address from "Email ID" and "Email ID- Contact 2", comma-separated; all of them are mailed. If the main Email ID cell doesn't parse cleanly, the original text is kept with `is_email_valid = false` (never guessed). A bad contact-2 cell is ignored and reported.
+- **Vendor names** match ignoring case, spaces, punctuation and Private/Pvt, Limited/Ltd, Company/Co, &/and (`ingest.clean.name_key`): `R.K PHARMA` = `R.K. Pharma`.
 
-```python
-# app/email_builder
-def build_email(vendor_name: str, due_date: date, rows: list[EmailRow]) -> tuple[str, str]
-    # -> (subject, html_body). Columns in this order: Invoice No | Invoice Amount | UTR | Payment Date |
-    #    Amount Paid | TDS Amount | Invoice Deduction | Reason. A None value renders as an empty cell.
+## (b) Endpoints
 
-# app/history
-def record_attempt(db: Session, record: AttemptRecord) -> None
-    # Inserts one email_history row per record.rows entry, COMMITS, then appends the same rows to the
-    # append-only Excel at config.HISTORY_XLSX_PATH. Called for every attempt: SENT, FAILED, DRY_RUN, NOT_SENT.
-```
+Request and response names are models in `backend/app/schemas.py`. `xlsx` = an Excel file download.
 
-**A provides, B calls:**
+| Method | Path | Owner | Request | Response |
+|---|---|---|---|---|
+| GET | /api/health | A | none | HealthOut |
+| POST | /api/batches | A | multipart files: consolidated, bank, gdn, tds, vendors (.xlsx/.xls, ≤ `MAX_UPLOAD_MB` each, default 20) | 201 BatchOut; 422 `detail: [{file, message}]` listing every problem, nothing stored |
+| GET | /api/batches/{id}/summary | A | none | BatchSummary |
+| POST | /api/batches/{id}/reconcile | A | none | BatchSummary |
+| GET | /api/batches/{id}/results | A | none | list[ResultOut] |
+| POST | /api/scheduler/run-now | A | none | RunNowOut |
+| GET | /api/batches/{id}/proforma.xlsx | B | none | xlsx |
+| GET | /api/batches/{id}/report.xlsx | B | none | xlsx |
+| GET | /api/email-queue | B | query: batch_id?, status? (QueueStatus) | list[QueueItemOut] |
+| GET | /api/email-queue/{id}/preview | B | none | EmailPreview |
+| GET | /api/email-history | B | none | list[HistoryOut] |
+| GET | /api/email-history/{id} | B | none | HistoryOut |
+| GET | /api/email-history/export.xlsx | B | none | xlsx |
+| POST | /api/email-history/rebuild-xlsx | B | none | RowCountOut |
+| GET | /api/exceptions | B | none | list[ResultOut] |
+| GET | /api/exceptions/export.xlsx | B | none | xlsx |
+| GET | /api/manual-review | B | none | list[ResultOut] |
+| PUT | /api/manual-review/{result_id}/reason | B | ReasonIn | ResultOut |
+| POST | /api/manual-review/gdn-upload | B | multipart file: file | GdnUploadOut |
+| PUT | /api/vendors/{id}/email | B | VendorEmailIn | VendorOut |
+| GET | /api/settings | B | none | SettingsModel |
+| PUT | /api/settings | B | SettingsModel | SettingsModel |
 
-```python
-# app/reconcile
-def resolve_review(db: Session, result_id: int, reason: str, who: str) -> None
-    # MANUAL_REVIEW -> DEDUCTION with the given reason, writes audit_log, commits.
-    # ValueError if the result is not MANUAL_REVIEW.
+Model fields, in short (exact types are in `schemas.py`):
 
-# app/config
-def get_setting(db: Session, key: str, default: str | None = None) -> str | None
-def set_setting(db: Session, key: str, value: str, updated_by: str) -> None   # upsert + audit_log + commit
-```
+- `HealthOut` {status}
+- `BatchOut` {id, uploaded_at, consolidated_file, bank_file, gdn_file, tds_file, vendors_file, status, error_message}
+- `BatchSummary` {batch: BatchOut, counts: {ResultStatus: int}, with every status present, files: {consolidated|bank|gdn|tds|vendors: FileReport}}
+- `FileReport` {file_name, rows_read, rows_kept, rows_skipped, rows_rejected, issues: [RowIssue]}. Skipped = dropped on purpose (bank credits, totals rows, duplicate vendors)
+- `RowIssue` {sheet, row (Excel row number), message, rejected: bool}. rejected=false means the row was kept but flagged, e.g. a vendor email that needs checking
+- `ResultOut` {id, batch_id, vendor_name, invoice_no, utr, invoice_value, payment_date, amount_paid, tds_amount, invoice_deduction, reason, status, exception_type}
+- `RunNowOut` {sent, failed, dry_run, not_sent}
+- `QueueItemOut` {id, vendor_id, vendor_name, to_email, send_on_date, status, sent_at, subject, invoice_count}
+- `EmailPreview` {subject, html, text}
+- `HistoryOut` = every `email_history` column
+- `RowCountOut` {rows} · `ReasonIn` {reason: 1–500 chars} · `GdnUploadOut` {rows_read, requeued}
+- `VendorEmailIn` {email: one address or comma-separated list} · `VendorOut` {id, party_name, email, is_email_valid}
+- `SettingsModel` {dry_run: bool, send_time: "HH:MM" IST}
 
-## 5. Config names (`backend/app/config.py`, owned by A, read by B)
+## (c) Shared Python functions
 
-`DATABASE_URL`, `HISTORY_XLSX_PATH`, `SECRET_KEY`, `TIMEZONE`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`. All are set from environment variables (see `.env.example`) with dev defaults.
+The signature column is checked by the contract test. Module prefixes are dropped (`Session` = `sqlalchemy.orm.Session`).
 
-## 6. Endpoints
+| Module | Name | Signature | Owner | Caller |
+|---|---|---|---|---|
+| app.config | get_setting | `(name: str) -> str` | A | A, B |
+| app.config | set_setting | `(name: str, value: str) -> None` | A | B (settings page) |
+| app.ingest | load_gdn_file | `(file: BinaryIO) -> list[GdnRow]` | A | B (gdn-upload) |
+| app.reconcile | requeue_after_reason | `(session: Session, result_id: int, reason: str) -> None` | A | B (manual review) |
+| app.reconcile | requeue_vendor_exceptions | `(session: Session, vendor_id: int) -> int` | A | B (vendor email fix) |
+| app.sending | send_on_date | `(payment_date: date) -> date` | A | B (`build_queue`), A (scheduler) |
+| app.email_builder | build_queue | `(session: Session, batch_id: int \| None = None, result_ids: list[int] \| None = None) -> list[int]` | B | A (after reconcile and requeue) |
+| app.email_builder | render_email | `(session: Session, queue_id: int) -> tuple[str, str, str]` | B | A (sender), B (preview) |
+| app.history.xlsx | append_new_rows | `(session: Session) -> int` | B | A (after each history write) |
+| app.history.xlsx | rebuild | `(session: Session) -> int` | B | B (rebuild-xlsx) |
 
-A's endpoint shapes are fixed here because B's frontend consumes them. For B's endpoints only the paths are fixed; B owns both ends, so B defines their shapes.
+What each one does:
 
-| Method | Path | Owner | Request → Response |
-|---|---|---|---|
-| GET | `/api/health` | A | → `{"status":"ok"}`; 500 if the DB is down (no auth) |
-| POST | `/api/auth/login` | A | `{username, password}` → `{username}` + session cookie (no auth) |
-| POST | `/api/auth/logout` | A | → 204 |
-| GET | `/api/auth/me` | A | → `{username}` or 401 |
-| POST | `/api/batches` | A | multipart files `consolidated`, `bank`, `gdn`, `tds`, `vendors` → 201 `Batch` |
-| GET | `/api/batches` | A | → `[Batch]`, newest first |
-| GET | `/api/batches/{batch_id}` | A | → `Batch` + `counts` |
-| POST | `/api/reconcile/{batch_id}` | A | → `{batch_id, counts}` |
-| GET | `/api/scheduler` | A | → `{next_run_at, last_run_at, dry_run: bool}` |
-| POST | `/api/scheduler/run?on=YYYY-MM-DD` | A | Runs the T+2 send now → `{on, sent, failed, dry_run, skipped}` |
-| GET | `/api/email-queue?on=` | B | |
-| GET | `/api/email-history` | B | |
-| GET | `/api/email-history/export` | B | |
-| GET | `/api/exceptions` | B | |
-| GET | `/api/review` | B | |
-| POST | `/api/review/{result_id}` | B | `{reason}`; calls `resolve_review` |
-| GET | `/api/reports/summary` | B | |
-| GET | `/api/vendors` | B | |
-| GET / PUT | `/api/settings` | B | Goes through `get_setting` / `set_setting` |
+- `get_setting(name)`: env var `NAME` (upper-case) first, then the `app_settings` row, then the default. Only known names are allowed: `dry_run` (default `"true"`) and `send_time` (default `"10:00"`). KeyError for anything else, so secrets in the environment can't be read through it.
+- `set_setting(name, value)`: upserts the `app_settings` row and appends to `audit_log` in one commit. An env var with the same name still wins on read.
+- `load_gdn_file(file)`: parses a GDN Report workbook (all month sheets) into `GdnRow`s (`contract.py`). It doesn't write to the DB. ValueError if the file isn't a GDN Report.
+- `requeue_after_reason(...)`: sets the reason on a MANUAL_REVIEW result, moves it to DEDUCTION, writes `audit_log`, then calls `build_queue(result_ids=[result_id])`. ValueError if the result isn't MANUAL_REVIEW.
+- `requeue_vendor_exceptions(session, vendor_id)`: re-checks that vendor's VENDOR_NOT_FOUND / INVALID_EMAIL results and queues those that now pass. Returns how many were queued.
+- `send_on_date(payment_date)`: the T+2 rule, already real (not a stub). Counts 2 business days after the bank value date, where every day except Sunday is a business day; holidays are not skipped. Fri→Mon, Sat→Tue, Thu→Sat. Nobody computes a send date any other way.
+- `build_queue(...)`: creates `email_queue` (one row per vendor + send date, from `send_on_date`) and `email_items` (one per UTR) for the sendable results of a batch, or for the given results. Skips UTRs already in `email_items`. Returns the new queue ids.
+- `render_email(session, queue_id)`: returns `(subject, html, text)`. Table columns in this order: Invoice No | Invoice Amount | UTR | Payment Date | Amount Paid | TDS Amount | Invoice Deduction | Reason. Empty cells stay empty.
+- `append_new_rows(session)`: appends `email_history` rows not yet in the Excel file at `config.HISTORY_XLSX_PATH`. `rebuild(session)` rewrites that file from the whole table. Both return a row count.
 
-`Batch` = `{id, uploaded_at, uploaded_by, consolidated_file, bank_file, gdn_file, tds_file, vendors_file, status, error_message}`
-`counts` = `{PAID_IN_FULL, TDS_ONLY, DEDUCTION, EXCEPTION, MANUAL_REVIEW}` (integers)
+## Shared fixture and seed
 
-## 7. Input files (as seen in the Aug–Sep 2026 reference files)
+- `backend/tests/fixtures/three_row_example.py`: ABC Pharma Distributors with three invoices (INV-2305 paid in full, INV-2310 TDS only, INV-2291 deduction "Goods returned (DN-0457)"). It holds source rows for all five input files, the parsed DB rows, the expected `reconciliation_results`, and the expected email cells as strings. Invented values are marked SAMPLE.
+- `backend/scripts/seed_fixture.py` loads the vendor and results into the dev DB, so B can build the email and screens without the engine.
+
+## Input files (as seen in the Aug–Sep 2026 reference files)
 
 | Upload field | Real file | Key columns |
 |---|---|---|
@@ -127,4 +141,4 @@ A's endpoint shapes are fixed here because B's frontend consumes them. For B's e
 | `bank` | Bank statement *.xls (legacy xls), or the DLB statement (same layout, debit-only, password-protected) | `Value Date` (dd/mm/yyyy), `Ref / Cheque No` (UTR), `Debit` (Indian format `5,45,060.00`), `Description` |
 | `gdn` | Credit note Consolidated *.xlsx (one sheet per month plus `TOTAL`) | `Particulars` (vendor), `Voucher Ref. No.` (vendor invoice), `Narration` (reason), `Gross Total` |
 | `tds` | 194Q TDS *.xlsx | `PARTY NAME`, `Inv No`, `TDS` / `Total TDS` |
-| `vendors` | Vendor Contact list *.xlsx (sheets `Vendor`, `CFA`) | `Vendor\nName`, `Email ID` (may hold several, `;`-separated) |
+| `vendors` | Vendor Contact list *.xlsx (sheet `Vendor` = distributors/stockists, sheet `CFA` = drug companies' carrying & forwarding agents; both are read) | `Vendor Name`, `Email ID`, `Email ID- Contact 2` (each may hold several addresses separated by `;`, `,` or `/`) |
