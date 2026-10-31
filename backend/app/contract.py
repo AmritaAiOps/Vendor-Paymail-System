@@ -31,6 +31,7 @@ class ExceptionType(StrEnum):
 
 class QueueStatus(StrEnum):
     PENDING = "PENDING"
+    SENDING = "SENDING"  # claimed by a run; left here only if a run died mid-send: check by hand, never auto-retried
     SENT = "SENT"
     FAILED = "FAILED"
     SKIPPED = "SKIPPED"

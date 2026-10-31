@@ -15,11 +15,12 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.contract import BatchStatus, ExceptionType as Ex, ResultStatus as St
+from app.contract import BatchStatus, ExceptionType as Ex, HistoryStatus, ResultStatus as St
 from app.email_builder import build_queue
-from app.ingest.clean import loose_name_key, name_key
-from app.models import (BankTransaction, ConsolidatedEntry, EmailItem, GdnRecord, ReconciliationResult, TdsRecord,
-                        UploadBatch, Vendor)
+from app.ingest.clean import clean_str, loose_name_key, name_key
+from app.models import (AuditLog, BankTransaction, ConsolidatedEntry, EmailItem, GdnRecord, ReconciliationResult,
+                        TdsRecord, UploadBatch, Vendor)
+from app.sending import SENDABLE, append_history_xlsx, record_history
 
 ROUNDING = Decimal("1.00")  # differences up to INR 1 are rounding
 
@@ -118,55 +119,126 @@ class _Vendors:
         return self.exact.get(name_key(name)) or (found[0] if len(found) == 1 else None)
 
 
+class _Batch:
+    """Everything decide() needs for one batch's invoices, loaded once: dict lookups, no nested loops."""
+
+    def __init__(self, session: Session, batch_id: int):
+        where = lambda model: select(model).where(model.batch_id == batch_id)
+        self.entries = session.scalars(where(ConsolidatedEntry).order_by(ConsolidatedEntry.id)).all()
+        self.bank = {}
+        for b in session.scalars(where(BankTransaction).order_by(BankTransaction.id)):
+            self.bank.setdefault(b.utr, b)  # strict UTR match; the statement's UTRs are unique for vendor payments
+        self.tds = _ByInvoice(session.scalars(where(TdsRecord)), "tds_amount")
+        self.gdn = _ByInvoice(session.scalars(where(GdnRecord)), "amount", "reason")
+        self.invoice_vendors = defaultdict(set)
+        for e in self.entries:
+            self.invoice_vendors[e.invoice_no].add(name_key(e.vendor_name))
+
+    def decide(self, e: ConsolidatedEntry, vendors: _Vendors) -> dict:
+        b = self.bank.get(e.utr) if e.utr else None
+        vendor = vendors.find(e.vendor_name) or (vendors.find(b.vendor_name) if b else None)  # bank name: 2nd try
+        unique = len(self.invoice_vendors[e.invoice_no]) == 1
+        tds_amount, _ = self.tds.get(e.vendor_name, e.invoice_no, unique)
+        gdn_amount, reason = self.gdn.get(e.vendor_name, e.invoice_no, unique)
+        return decide(e.invoice_amount, b, tds_amount, gdn_amount, reason, vendor)
+
+
+def _queued(session: Session, result_ids: list[int]) -> set[int]:
+    return set(session.scalars(select(EmailItem.reconciliation_result_id)
+                               .where(EmailItem.reconciliation_result_id.in_(result_ids))))
+
+
+def _record_not_sent(session: Session, result: ReconciliationResult, entry: ConsolidatedEntry) -> None:
+    """A blocked invoice gets one NOT_SENT history row per UTR and reason (record_history skips repeats)."""
+    if result.status not in SENDABLE:
+        record_history(session, HistoryStatus.NOT_SENT, [(result, entry)], not_sent_reason=result.exception_type)
+
+
 def reconcile_batch(session: Session, batch_id: int) -> None:
     """Decide every consolidated entry of the batch and store the results (re-runnable: an existing result is
-    recomputed unless it's already queued for email). Then calls build_queue for the batch and commits."""
-    where = lambda model: select(model).where(model.batch_id == batch_id)
-    entries = session.scalars(where(ConsolidatedEntry).order_by(ConsolidatedEntry.id)).all()
-    bank = {}
-    for b in session.scalars(where(BankTransaction).order_by(BankTransaction.id)):
-        bank.setdefault(b.utr, b)  # strict UTR match; the statement's UTRs are unique for vendor payments
-    tds = _ByInvoice(session.scalars(where(TdsRecord)), "tds_amount")
-    gdn = _ByInvoice(session.scalars(where(GdnRecord)), "amount", "reason")
+    recomputed unless it's already queued for email). Blocked invoices get their NOT_SENT history row.
+    Then calls build_queue for the batch, commits, and updates the history Excel file."""
+    batch = _Batch(session, batch_id)
     vendors = _Vendors(session.scalars(select(Vendor)))
-    invoice_vendors = defaultdict(set)
-    for e in entries:
-        invoice_vendors[e.invoice_no].add(name_key(e.vendor_name))
+    existing = {r.consolidated_entry_id: r for r in session.scalars(select(ReconciliationResult).where(
+        ReconciliationResult.consolidated_entry_id.in_([e.id for e in batch.entries])))}
+    queued = _queued(session, [r.id for r in existing.values()])
 
-    existing = {r.consolidated_entry_id: r for r in session.scalars(
-        select(ReconciliationResult).where(ReconciliationResult.consolidated_entry_id.in_([e.id for e in entries])))}
-    queued = set(session.scalars(select(EmailItem.reconciliation_result_id).where(
-        EmailItem.reconciliation_result_id.in_([r.id for r in existing.values()]))))
-
-    for e in entries:
-        b = bank.get(e.utr) if e.utr else None
-        vendor = vendors.find(e.vendor_name) or (vendors.find(b.vendor_name) if b else None)  # bank name: 2nd try
-        unique = len(invoice_vendors[e.invoice_no]) == 1
-        tds_amount, _ = tds.get(e.vendor_name, e.invoice_no, unique)
-        gdn_amount, reason = gdn.get(e.vendor_name, e.invoice_no, unique)
-        fields = decide(e.invoice_amount, b, tds_amount, gdn_amount, reason, vendor)
+    for e in batch.entries:
         result = existing.get(e.id)
+        if result is not None and result.id in queued:
+            continue
+        fields = batch.decide(e, vendors)
         if result is None:
-            session.add(ReconciliationResult(consolidated_entry_id=e.id, **fields))
-        elif result.id not in queued:
+            result = ReconciliationResult(consolidated_entry_id=e.id, **fields)
+            session.add(result)
+        else:
             for k, v in fields.items():
                 setattr(result, k, v)
+        session.flush()
+        _record_not_sent(session, result, e)
 
     session.get(UploadBatch, batch_id).status = BatchStatus.RECONCILED
     session.commit()
     build_queue(session, batch_id=batch_id)  # Person B: creates email_queue / email_items for this batch
     session.commit()
+    append_history_xlsx(session)
 
 
 def requeue_after_reason(session: Session, result_id: int, reason: str) -> None:
     """Set the reason on a MANUAL_REVIEW result, move it to DEDUCTION, audit, and queue it via
-    email_builder.build_queue(result_ids=[result_id]). ValueError if the result is not MANUAL_REVIEW."""
-    # STUB(contract): Person A replaces this. Do-nothing until then.
-    return None
+    email_builder.build_queue(result_ids=[result_id]). build_queue gives it its T+2 send date; if that date
+    has passed, the next run sends it. ValueError if the result is not MANUAL_REVIEW, has no deduction to
+    explain (overpaid, or TDS larger than the shortfall), or the reason is empty or over 500 characters."""
+    result = session.get(ReconciliationResult, result_id)
+    if result is None or result.status != St.MANUAL_REVIEW:
+        raise ValueError(f"result {result_id} is not waiting for manual review")
+    if not result.invoice_deduction:
+        raise ValueError(f"result {result_id} has no deduction a reason could explain; fix the data instead")
+    reason = clean_str(reason)
+    if not reason or len(reason) > 500:
+        raise ValueError("reason must be 1-500 characters")
+    session.add(AuditLog(what=f"reconciliation_result:{result_id} reason, MANUAL_REVIEW -> DEDUCTION",
+                         old_value=result.reason, new_value=reason))
+    result.reason, result.status, result.exception_type = reason, St.DEDUCTION, None
+    session.commit()
+    build_queue(session, result_ids=[result_id])
+    session.commit()
 
 
 def requeue_vendor_exceptions(session: Session, vendor_id: int) -> int:
-    """Re-check this vendor's VENDOR_NOT_FOUND / INVALID_EMAIL results (e.g. after an email fix) and queue
-    the ones that now pass. Returns how many were queued."""
-    # STUB(contract): Person A replaces this. Do-nothing until then.
-    return 0
+    """Re-check this vendor's VENDOR_NOT_FOUND / INVALID_EMAIL results (after an email fix or a new vendor row)
+    with the full rule set, and queue the ones that now pass. Returns how many were queued.
+    VENDOR_NOT_FOUND results have no vendor yet, so all of them are re-matched; only those that now match this
+    vendor are changed. ValueError if the vendor doesn't exist."""
+    if session.get(Vendor, vendor_id) is None:
+        raise ValueError(f"vendor {vendor_id} not found")
+    rows = session.execute(
+        select(ReconciliationResult, ConsolidatedEntry)
+        .join(ConsolidatedEntry, ConsolidatedEntry.id == ReconciliationResult.consolidated_entry_id)
+        .where(ReconciliationResult.status == St.EXCEPTION,
+               ((ReconciliationResult.exception_type == Ex.INVALID_EMAIL)
+                & (ReconciliationResult.vendor_id == vendor_id))
+               | (ReconciliationResult.exception_type == Ex.VENDOR_NOT_FOUND))).all()
+    queued = _queued(session, [r.id for r, _ in rows])
+    vendors, batches, ready = _Vendors(session.scalars(select(Vendor))), {}, []
+    for result, entry in rows:
+        if result.id in queued:
+            continue
+        if entry.batch_id not in batches:
+            batches[entry.batch_id] = _Batch(session, entry.batch_id)
+        fields = batches[entry.batch_id].decide(entry, vendors)
+        if fields["vendor_id"] != vendor_id:  # still unmatched, or another vendor's: not this call's business
+            continue
+        for k, v in fields.items():
+            setattr(result, k, v)
+        if result.status in SENDABLE:
+            ready.append(result.id)
+        else:  # the vendor is found now, but e.g. the amounts need manual review
+            session.flush()
+            _record_not_sent(session, result, entry)
+    session.commit()
+    if ready:
+        build_queue(session, result_ids=ready)
+        session.commit()
+    return len(ready)
