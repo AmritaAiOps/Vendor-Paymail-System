@@ -11,6 +11,10 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", "")
+SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "Sudhamayi Enterprises Pvt. Ltd.")
+SMTP_STARTTLS = os.environ.get("SMTP_STARTTLS", "true").strip().lower() not in ("false", "0", "no")
+# When set, every email goes to this inbox instead of the vendor (testing only; the send still counts as SENT)
+TEST_RECIPIENT = os.environ.get("TEST_RECIPIENT", "").strip()
 
 
 # The only keys the app_settings store accepts, with their defaults. Unknown keys are rejected so the
