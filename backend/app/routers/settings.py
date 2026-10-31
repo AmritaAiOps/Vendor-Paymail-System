@@ -1,17 +1,16 @@
 from fastapi import APIRouter
 
-from app.routers import stub
+from app.routers import STUB
+from app.schemas import SettingsModel
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
-EXAMPLE = {"dry_run": "true", "send_time": "10:00"}
 
-
-@router.get("")
+@router.get("", response_model=SettingsModel, dependencies=[STUB])
 def get_settings():
-    return stub(EXAMPLE)
+    return SettingsModel(dry_run=True, send_time="10:00")
 
 
-@router.put("")
-def put_settings(body: dict[str, str]):
-    return stub(EXAMPLE)
+@router.put("", response_model=SettingsModel, dependencies=[STUB])
+def put_settings(body: SettingsModel):
+    return body

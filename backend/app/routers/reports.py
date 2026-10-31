@@ -1,10 +1,15 @@
 from fastapi import APIRouter
 
-from app.routers import stub
+from app.routers import stub_xlsx
 
-router = APIRouter(prefix="/reports", tags=["reports"])
+router = APIRouter(prefix="/batches", tags=["reports"])
 
 
-@router.get("/summary")
-def summary():
-    return stub({})
+@router.get("/{id}/proforma.xlsx")
+def proforma(id: int):
+    return stub_xlsx(f"proforma_batch_{id}.xlsx")
+
+
+@router.get("/{id}/report.xlsx")
+def report(id: int):
+    return stub_xlsx(f"report_batch_{id}.xlsx")
