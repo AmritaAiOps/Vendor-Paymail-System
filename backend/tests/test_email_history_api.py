@@ -66,9 +66,6 @@ def test_history_row_and_export(client, db):
 
 def test_preview_shows_the_email_as_sent(client, db):
     seed(db)
-    from app.models import ReconciliationResult, Vendor
-    db.execute(ReconciliationResult.__table__.update().values(vendor_id=db.scalar(select(Vendor.id))))
-    db.commit()
     build_queue(db)
     qid = db.scalar(select(EmailQueue.id))
     live = client.get(f"/api/email-queue/{qid}/preview").json()

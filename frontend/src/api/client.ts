@@ -75,15 +75,17 @@ function upload<T>(path: string, form: FormData, onProgress: (pct: number) => vo
 export type ResultStatus = "PAID_IN_FULL" | "TDS_ONLY" | "DEDUCTION" | "EXCEPTION" | "MANUAL_REVIEW";
 export type QueueStatus = "PENDING" | "SENDING" | "SENT" | "FAILED" | "SKIPPED";
 export type HistoryStatus = "SENT" | "FAILED" | "DRY_RUN" | "NOT_SENT";
+export type BatchStatus = "UPLOADED" | "RECONCILED" | "FAILED";
+export type ExceptionType = "UTR_NOT_FOUND" | "VENDOR_NOT_FOUND" | "INVALID_EMAIL" | "REASON_MISSING" | "BOUNCED" | "AMOUNT_MISMATCH";
 export type ResultOut = {
   id: number; batch_id: number; vendor_name: string; invoice_no: string; utr: string | null;
   invoice_value: string; payment_date: string | null; amount_paid: string | null;
   tds_amount: string | null; invoice_deduction: string | null; reason: string | null;
-  status: ResultStatus; exception_type: string | null;
+  status: ResultStatus; exception_type: ExceptionType | null; send_on_date: string | null;
 };
 export type RowIssue = { sheet: string; row: number; message: string; rejected: boolean };
 export type FileReport = { file_name: string; rows_read: number; rows_kept: number; rows_skipped: number; rows_rejected: number; issues: RowIssue[] };
-export type BatchOut = { id: number; uploaded_at: string; consolidated_file: string; bank_file: string; gdn_file: string; tds_file: string; vendors_file: string; status: string; error_message: string | null };
+export type BatchOut = { id: number; uploaded_at: string; consolidated_file: string; bank_file: string; gdn_file: string; tds_file: string; vendors_file: string; status: BatchStatus; error_message: string | null };
 export type BatchSummary = { batch: BatchOut; counts: Record<ResultStatus, number>; files: Record<string, FileReport> };
 export type QueueItemOut = { id: number; vendor_id: number; vendor_name: string; to_email: string | null; send_on_date: string; status: QueueStatus; sent_at: string | null; subject: string | null; invoice_count: number };
 export type EmailPreview = { subject: string; html: string; text: string };
@@ -91,12 +93,12 @@ export type HistoryOut = {
   id: number; logged_at: string; batch_id: number | null; vendor_name: string; to_email: string | null; subject: string | null;
   invoice_no: string | null; utr: string | null; invoice_amount: string | null; payment_date: string | null;
   amount_paid: string | null; tds_amount: string | null; invoice_deduction: string | null; reason: string | null;
-  status: HistoryStatus; not_sent_reason: string | null; scheduled_send_date: string | null; sent_at: string | null;
+  status: HistoryStatus; not_sent_reason: ExceptionType | null; scheduled_send_date: string | null; sent_at: string | null;
   error_message: string | null; email_queue_id: number | null;
 };
 export type HistoryFilters = { date_from?: string; date_to?: string; vendor?: string; status?: HistoryStatus; q?: string };
-export type VendorOut = { id: number; party_name: string; email: string; is_email_valid: boolean };
-export type SettingsModel = { dry_run: boolean; send_time: string };
+export type VendorOut = { id: number; party_name: string; email: string | null; is_email_valid: boolean };
+export type SettingsModel = { dry_run: boolean; send_time: string; signature: string };
 export type RunNowOut = { sent: number; failed: number; dry_run: number; not_sent: number };
 
 export const UPLOAD_FIELDS = ["consolidated", "bank", "gdn", "tds", "vendors"] as const;

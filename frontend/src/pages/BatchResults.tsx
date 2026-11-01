@@ -20,14 +20,14 @@ async function fetchAll(id: number): Promise<ResultOut[]> {
   }
 }
 
-type Key = "vendor_name" | "invoice_no" | "invoice_value" | "utr" | "payment_date" | "amount_paid" | "tds_amount" | "invoice_deduction" | "reason" | "status";
+type Key = "vendor_name" | "invoice_no" | "invoice_value" | "utr" | "payment_date" | "amount_paid" | "tds_amount" | "invoice_deduction" | "reason" | "status" | "send_on_date";
 const COLS: { key: Key; label: string; money?: boolean }[] = [
   { key: "vendor_name", label: "Vendor" }, { key: "invoice_no", label: "Invoice" }, { key: "invoice_value", label: "Invoice amount", money: true },
   { key: "utr", label: "UTR" }, { key: "payment_date", label: "Payment date" }, { key: "amount_paid", label: "Paid", money: true },
   { key: "tds_amount", label: "TDS amount", money: true }, { key: "invoice_deduction", label: "Invoice deduction", money: true },
-  { key: "reason", label: "Reason" }, { key: "status", label: "Status" },
+  { key: "reason", label: "Reason" }, { key: "status", label: "Status" }, { key: "send_on_date", label: "Send date" },
 ];
-// Send date is not here: ResultOut has no such field, and the contract says nobody else computes it.
+// Send date is the queued email's send_on_date from the API (empty until queued); the UI never computes it.
 
 function compare(a: ResultOut, b: ResultOut, key: Key, money?: boolean) {
   const x = a[key], y = b[key];
@@ -149,6 +149,7 @@ export default function BatchResults() {
                       <td className={`${td} ${num}`}>{formatMoney(r.tds_amount)}</td><td className={`${td} ${num}`}>{formatMoney(r.invoice_deduction)}</td>
                       <td className={td}>{r.reason}</td>
                       <td className={td}><StatusBadge map={RESULT_BADGE} value={r.status} />{r.exception_type && <div className="mt-1 text-xs text-slate-700">{r.exception_type.replaceAll("_", " ").toLowerCase()}</div>}</td>
+                      <td className={`${td} whitespace-nowrap`}>{formatDate(r.send_on_date)}</td>
                     </tr>
                   ))}
                 </tbody>
