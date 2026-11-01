@@ -127,3 +127,14 @@ def test_queue_preview_and_proforma_endpoints(client, db):
     assert ["Vendor Name", "ABC Pharma Distributors"] == cells[0][:2]
     assert fx.EMAIL_HEADER in cells and all(v in cells for v in fx.EMAIL_ROWS.values())
     assert client.get("/api/batches/999/proforma.xlsx").status_code == 404
+
+
+def test_signature_comes_from_settings_and_is_escaped(db):
+    from app import config
+    seed(db)
+    build_queue(db)
+    qid = db.scalar(select(EmailQueue.id))
+    assert "[Name, designation]" in render_email(db, qid)[1]  # the default
+    config.set_setting("signature", "A. Rao, <b>Manager</b>")
+    _, html, text = render_email(db, qid)
+    assert "A. Rao, &lt;b&gt;Manager&lt;/b&gt;" in html and "A. Rao, <b>Manager</b>" in text

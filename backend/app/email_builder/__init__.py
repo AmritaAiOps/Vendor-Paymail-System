@@ -13,16 +13,8 @@ from app.email_builder.rows import HEADER, row, sendable
 from app.models import ConsolidatedEntry, EmailItem, EmailQueue, ReconciliationResult, Vendor
 
 COMPANY = "Sudhamayi Enterprises Pvt. Ltd."
-SIGNATURE_PLACEHOLDER = "[Name, designation]"
 # autoescape covers .html only; the text template is plain text
 _env = Environment(loader=FileSystemLoader(Path(__file__).parent / "templates"), autoescape=select_autoescape(["html"]))
-
-
-def _signature() -> str:
-    try:
-        return config.get_setting("signature")
-    except KeyError:  # shortcut: config.SETTINGS lacks "signature" until A pushes it, drop this try/except when it lands
-        return SIGNATURE_PLACEHOLDER
 
 
 def build_queue(session: Session, batch_id: int | None = None, result_ids: list[int] | None = None) -> list[int]:
@@ -75,6 +67,6 @@ def render_email(session: Session, queue_id: int) -> tuple[str, str, str]:
         .join(ConsolidatedEntry, ConsolidatedEntry.id == ReconciliationResult.consolidated_entry_id)
         .where(EmailItem.email_queue_id == queue_id).order_by(EmailItem.id))
     ctx = dict(vendor_name=vendor.party_name, header=HEADER, rows=[row(r, e) for r, e in pairs],
-               signature=_signature(), company=COMPANY)
+               signature=config.get_setting("signature"), company=COMPANY)
     return (f"Payment Details – {vendor.party_name} – {COMPANY}",
             _env.get_template("email.html").render(ctx), _env.get_template("email.txt").render(ctx))
