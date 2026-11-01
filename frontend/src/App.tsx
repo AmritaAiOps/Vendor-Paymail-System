@@ -1,5 +1,15 @@
+import type { ReactElement } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import BatchResults from "./pages/BatchResults";
+import EmailHistory from "./pages/EmailHistory";
+import EmailQueue from "./pages/EmailQueue";
 import { Placeholder } from "./pages/Placeholder";
+import Upload from "./pages/Upload";
+
+// Pages built so far; the rest still show a placeholder
+const built: Record<string, ReactElement> = {
+  "/upload": <Upload />, "/batch-results": <BatchResults />, "/email-queue": <EmailQueue />, "/email-history": <EmailHistory />,
+};
 
 const pages = [
   { path: "/upload", title: "Upload" },
@@ -38,8 +48,9 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/upload" replace />} />
           {pages.map((p) => (
-            <Route key={p.path} path={p.path} element={<Placeholder title={p.title} />} />
+            <Route key={p.path} path={p.path} element={built[p.path] ?? <Placeholder title={p.title} />} />
           ))}
+          <Route path="/batch-results/:id" element={<BatchResults />} />
           <Route path="*" element={<Placeholder title="Not found" />} />
         </Routes>
       </main>

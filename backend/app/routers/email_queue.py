@@ -34,4 +34,9 @@ def preview(id: int, db: Session = Depends(get_db)):
         subject, html, text = render_email(db, id)
     except LookupError:
         raise HTTPException(404, "Email queue entry not found")
+    queue_row = db.get(EmailQueue, id)
+    if queue_row.status == QueueStatus.SENT and queue_row.body_html:
+        # the sender stores what it actually sent; show that, not a fresh render (the signature may have changed since).
+        # shortcut: the plain-text part is still re-rendered, only subject and HTML are kept as sent
+        subject, html = queue_row.subject or subject, queue_row.body_html
     return EmailPreview(subject=subject, html=html, text=text)

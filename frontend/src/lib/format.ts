@@ -8,6 +8,12 @@ export function formatMoney(v: string | number | null | undefined): string {
   return inr.format(Number(v));
 }
 
+// ISO datetime -> "05-Aug-26 14:30" (text slice, no timezone shift). Date-only input gives just the date.
+export function formatDateTime(iso: string | null | undefined): string {
+  const t = /T(\d{2}:\d{2})/.exec(iso ?? "");
+  return t ? `${formatDate(iso)} ${t[1]}` : formatDate(iso);
+}
+
 // ISO "YYYY-MM-DD" (or datetime) -> "05-Aug-26". Sliced as text so timezones can't shift the day.
 export function formatDate(iso: string | null | undefined): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso ?? "");

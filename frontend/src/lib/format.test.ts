@@ -1,5 +1,11 @@
 import { expect, test } from "vitest";
-import { formatDate, formatMoney } from "./format";
+import { formatDate, formatDateTime, formatMoney } from "./format";
+
+test("datetime keeps the clock time", () => {
+  expect(formatDateTime("2025-09-15T10:05:33")).toBe("15-Sep-25 10:05");
+  expect(formatDateTime("2025-09-15")).toBe("15-Sep-25");
+  expect(formatDateTime(null)).toBe("");
+});
 
 test("Indian grouping", () => {
   expect(formatMoney(545060)).toBe("5,45,060.00");
