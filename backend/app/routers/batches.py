@@ -8,7 +8,7 @@ from app import config
 from app.contract import ResultStatus
 from app.ingest import FILE_KINDS, FileError, ingest_batch
 from app.ingest.clean import clean_str
-from app.models import ConsolidatedEntry, ReconciliationResult, UploadBatch, get_db
+from app.models import ConsolidatedEntry, EmailItem, EmailQueue, ReconciliationResult, UploadBatch, get_db
 from app.reconcile import reconcile_batch
 from app.schemas import BatchOut, BatchSummary, ResultOut
 
@@ -85,8 +85,10 @@ def results(id: int, response: Response, status: ResultStatus | None = None,
             limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
     """One page of results in consolidated-report order. The total before paging is in the X-Total-Count header."""
     _batch(db, id)
-    q = (select(ReconciliationResult, ConsolidatedEntry)
+    q = (select(ReconciliationResult, ConsolidatedEntry, EmailQueue.send_on_date)
          .join(ConsolidatedEntry, ConsolidatedEntry.id == ReconciliationResult.consolidated_entry_id)
+         .outerjoin(EmailItem, EmailItem.reconciliation_result_id == ReconciliationResult.id)
+         .outerjoin(EmailQueue, EmailQueue.id == EmailItem.email_queue_id)
          .where(ConsolidatedEntry.batch_id == id))
     if status:
         q = q.where(ReconciliationResult.status == status)
@@ -96,5 +98,5 @@ def results(id: int, response: Response, status: ResultStatus | None = None,
     return [ResultOut(id=r.id, batch_id=id, vendor_name=e.vendor_name, invoice_no=e.invoice_no, utr=e.utr,
                       invoice_value=r.invoice_value, payment_date=r.payment_date, amount_paid=r.amount_paid,
                       tds_amount=r.tds_amount, invoice_deduction=r.invoice_deduction, reason=r.reason,
-                      status=r.status, exception_type=r.exception_type)
-            for r, e in db.execute(q.order_by(ConsolidatedEntry.id).limit(limit).offset(offset))]
+                      status=r.status, exception_type=r.exception_type, send_on_date=send_on)
+            for r, e, send_on in db.execute(q.order_by(ConsolidatedEntry.id).limit(limit).offset(offset))]
