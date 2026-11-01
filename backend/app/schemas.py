@@ -49,6 +49,7 @@ class BatchSummary(BaseModel):
 class ResultOut(BaseModel):
     id: int
     batch_id: int
+    vendor_id: int | None  # matched vendor; null for VENDOR_NOT_FOUND
     vendor_name: str
     invoice_no: str
     utr: str | None

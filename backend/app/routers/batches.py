@@ -95,7 +95,7 @@ def results(id: int, response: Response, status: ResultStatus | None = None,
     if vendor:
         q = q.where(func.lower(ConsolidatedEntry.vendor_name).contains(vendor.lower(), autoescape=True))
     response.headers["X-Total-Count"] = str(db.scalar(select(func.count()).select_from(q.subquery())))
-    return [ResultOut(id=r.id, batch_id=id, vendor_name=e.vendor_name, invoice_no=e.invoice_no, utr=e.utr,
+    return [ResultOut(id=r.id, batch_id=id, vendor_id=r.vendor_id, vendor_name=e.vendor_name, invoice_no=e.invoice_no, utr=e.utr,
                       invoice_value=r.invoice_value, payment_date=r.payment_date, amount_paid=r.amount_paid,
                       tds_amount=r.tds_amount, invoice_deduction=r.invoice_deduction, reason=r.reason,
                       status=r.status, exception_type=r.exception_type, send_on_date=send_on)
