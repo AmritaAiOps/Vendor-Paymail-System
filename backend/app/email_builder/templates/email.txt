@@ -1,0 +1,13 @@
+Dear {{ vendor_name }},
+
+Please find below the payment details for your invoices.
+
+{{ header | join(" | ") }}
+{% for r in rows -%}
+{{ r | join(" | ") }}
+{% endfor %}
+Please review and reply with any questions.
+
+Yours faithfully,
+{{ signature }}
+{{ company }}

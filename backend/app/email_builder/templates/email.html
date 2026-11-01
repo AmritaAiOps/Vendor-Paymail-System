@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:16px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1f2933;">
+<p>Dear {{ vendor_name }},</p>
+<p>Please find below the payment details for your invoices.</p>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;font-size:13px;">
+<tr>
+{%- for h in header %}
+<th align="left" bgcolor="#1f2a44" style="background-color:#1f2a44;color:#ffffff;font-weight:bold;padding:8px 10px;border:1px solid #d9dee7;white-space:nowrap;">{{ h }}</th>
+{%- endfor %}
+</tr>
+{%- for r in rows %}
+{%- set shade = '#f5f7fa' if loop.index is even else '#ffffff' %}
+<tr>
+{%- for c in r %}
+<td align="{{ 'right' if loop.index in (2, 5, 6, 7) else 'left' }}" bgcolor="{{ shade }}" style="padding:8px 10px;border:1px solid #d9dee7;">{{ c }}</td>
+{%- endfor %}
+</tr>
+{%- endfor %}
+</table>
+<p>Please review and reply with any questions.</p>
+<p>Yours faithfully,<br>{{ signature }}<br><b>{{ company }}</b></p>
+</body>
+</html>
