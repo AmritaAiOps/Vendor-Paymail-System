@@ -60,6 +60,7 @@ class ResultOut(BaseModel):
     reason: str | None
     status: ResultStatus
     exception_type: ExceptionType | None
+    send_on_date: date | None  # email_queue.send_on_date once queued
 
 
 class RunNowOut(BaseModel):
@@ -138,3 +139,4 @@ class SettingsModel(BaseModel):
     """GET and PUT /api/settings body."""
     dry_run: bool
     send_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")  # HH:MM, IST
+    signature: str = Field(max_length=500)  # sign-off under the email table

@@ -17,14 +17,15 @@ def seed(db) -> int:
     if db.scalar(select(Vendor).where(Vendor.party_name == fx.VENDOR["party_name"])):
         raise ValueError("already seeded: delete dev.db and run `alembic upgrade head` to start over")
     batch = UploadBatch(status=BatchStatus.RECONCILED, **fx.FILE_NAMES)
-    db.add_all([batch, Vendor(is_email_valid=True, **fx.VENDOR)])
+    vendor = Vendor(is_email_valid=True, **fx.VENDOR)
+    db.add_all([batch, vendor])
     db.flush()
     for e in fx.CONSOLIDATED_ENTRIES:
         entry = ConsolidatedEntry(batch_id=batch.id, **e)
         bank = BankTransaction(batch_id=batch.id, **fx.BANK_TRANSACTIONS[e["utr"]])
         db.add_all([entry, bank])
         db.flush()
-        db.add(ReconciliationResult(consolidated_entry_id=entry.id, bank_txn_id=bank.id,
+        db.add(ReconciliationResult(consolidated_entry_id=entry.id, bank_txn_id=bank.id, vendor_id=vendor.id,
                                     **fx.EXPECTED_RESULTS[e["invoice_no"]]))
     db.commit()
     return batch.id

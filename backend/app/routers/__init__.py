@@ -36,6 +36,7 @@ def canned_batch() -> BatchOut:
 
 def canned_results() -> list[ResultOut]:
     return [ResultOut(id=i, batch_id=1, vendor_name=e["vendor_name"], invoice_no=e["invoice_no"], utr=e["utr"],
+                      send_on_date=fx.SEND_ON_DATES[fx.EXPECTED_RESULTS[e["invoice_no"]]["payment_date"]],
                       **fx.EXPECTED_RESULTS[e["invoice_no"]])
             for i, e in enumerate(fx.CONSOLIDATED_ENTRIES, 1)]
 
