@@ -3,12 +3,15 @@ import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import BatchResults from "./pages/BatchResults";
 import EmailHistory from "./pages/EmailHistory";
 import EmailQueue from "./pages/EmailQueue";
+import Exceptions from "./pages/Exceptions";
+import ManualReview from "./pages/ManualReview";
 import { Placeholder } from "./pages/Placeholder";
 import Upload from "./pages/Upload";
 
 // Pages built so far; the rest still show a placeholder
 const built: Record<string, ReactElement> = {
   "/upload": <Upload />, "/batch-results": <BatchResults />, "/email-queue": <EmailQueue />, "/email-history": <EmailHistory />,
+  "/exceptions": <Exceptions />, "/manual-review": <ManualReview />,
 };
 
 const pages = [

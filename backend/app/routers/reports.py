@@ -2,11 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.email_builder.proforma import proforma_xlsx
-from app.models import UploadBatch, get_db
-from app.routers import stub_xlsx
+from app.models import ConsolidatedEntry, UploadBatch, get_db
+from app.reports.export import XLSX
+from app.reports.results import results_out, results_xlsx
 
 router = APIRouter(prefix="/batches", tags=["reports"])
-XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @router.get("/{id}/proforma.xlsx")
@@ -18,5 +18,8 @@ def proforma(id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{id}/report.xlsx")
-def report(id: int):  # still a stub: a later phase
-    return stub_xlsx(f"report_batch_{id}.xlsx")
+def report(id: int, db: Session = Depends(get_db)):
+    """Every reconciliation result of the batch, whatever its status."""
+    if db.get(UploadBatch, id) is None:
+        raise HTTPException(404, "Batch not found")
+    return results_xlsx(results_out(db, ConsolidatedEntry.batch_id == id), "Reconciliation", f"report_batch_{id}.xlsx")

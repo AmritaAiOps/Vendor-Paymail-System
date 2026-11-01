@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { api, downloadUrl, type HistoryFilters, type HistoryOut, type HistoryStatus } from "../api/client";
 import { EmailFrame } from "../components/EmailFrame";
 import { DownloadLink, Empty, ErrorBox, HISTORY_BADGE, Loading, Modal, Pager, StatusBadge, StubTag, btn, btnPrimary, input, num, td, th } from "../components/ui";
@@ -14,6 +15,13 @@ const WHY: Record<string, string> = {
   BOUNCED: "The bank returned this payment (NEFT return), so no email was sent.",
   AMOUNT_MISMATCH: "TDS and GDN debit notes do not explain the shortfall, or the invoice was overpaid. It is waiting for manual review.",
 };
+// A Not sent row links to the page that holds the item behind it, filtered to that UTR (or invoice).
+const IN_REVIEW = new Set(["REASON_MISSING", "AMOUNT_MISMATCH"]);
+function itemLink(h: HistoryOut): string | null {
+  const find = h.utr || h.invoice_no;
+  if (h.status !== "NOT_SENT" || !h.not_sent_reason || !find) return null;
+  return `${IN_REVIEW.has(h.not_sent_reason) ? "/manual-review" : "/exceptions"}?q=${encodeURIComponent(find)}`;
+}
 const bounced = (h: HistoryOut) => h.not_sent_reason === "BOUNCED";
 
 function Detail({ row, onClose }: { row: HistoryOut; onClose: () => void }) {
@@ -35,6 +43,7 @@ function Detail({ row, onClose }: { row: HistoryOut; onClose: () => void }) {
         <div role="note" className={`rounded border p-3 ${bounced(h) ? "border-amber-400 bg-amber-50" : "border-slate-300 bg-slate-50"}`}>
           <h3 className="font-medium">Why no email was sent</h3>
           <p className="mt-1">{WHY[h.not_sent_reason ?? ""] ?? h.not_sent_reason ?? "No reason was recorded."}</p>
+          {itemLink(h) && <p className="mt-2"><Link className="underline" to={itemLink(h)!}>Open the {IN_REVIEW.has(h.not_sent_reason ?? "") ? "manual review" : "exception"} item</Link></p>}
         </div>
       )}
       {h.status === "FAILED" && h.error_message && <p role="alert" className="mb-3 rounded border border-red-300 bg-red-50 p-3 text-red-900">Send error: {h.error_message}</p>}
@@ -63,7 +72,10 @@ export default function EmailHistory() {
     <section>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">Email History<StubTag path="/email-history" /></h1>
-        <DownloadLink href={downloadUrl.historyExport()}>Download history (Excel)</DownloadLink>
+        <div className="flex flex-wrap gap-2">
+          {Object.values(filters).some(Boolean) && <DownloadLink href={downloadUrl.historyExport(filters)}>Export filtered view</DownloadLink>}
+          <DownloadLink href={downloadUrl.historyExport()}>Download history (Excel)</DownloadLink>
+        </div>
       </div>
       <p className="mt-1 text-slate-600">Every email the app sent or did not send, newest first.</p>
 
@@ -113,7 +125,12 @@ export default function EmailHistory() {
                     <td className={`${td} ${num}`}>{formatMoney(h.amount_paid)}</td><td className={`${td} ${num}`}>{formatMoney(h.tds_amount)}</td>
                     <td className={`${td} ${num}`}>{formatMoney(h.invoice_deduction)}</td><td className={td}>{h.reason}</td>
                     <td className={td}><StatusBadge map={HISTORY_BADGE} value={h.status} /></td>
-                    <td className={td}>{h.not_sent_reason && <span className={bounced(h) ? "font-semibold" : ""}>{h.not_sent_reason.replaceAll("_", " ").toLowerCase()}</span>}</td>
+                    <td className={td}>{h.not_sent_reason && (() => {
+                      const text = h.not_sent_reason.replaceAll("_", " ").toLowerCase(), to = itemLink(h);
+                      return to
+                        ? <Link to={to} className={`underline ${bounced(h) ? "font-semibold" : ""}`} onClick={(e) => e.stopPropagation()}>{text}</Link>
+                        : <span className={bounced(h) ? "font-semibold" : ""}>{text}</span>;
+                    })()}</td>
                     <td className={`${td} whitespace-nowrap`}>{formatDateTime(h.sent_at)}</td>
                     <td className={td}><button className={btn} onClick={(e) => { e.stopPropagation(); setOpen(h); }}>View<span className="sr-only"> {h.invoice_no ?? h.vendor_name}</span></button></td>
                   </tr>

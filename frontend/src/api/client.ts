@@ -133,7 +133,11 @@ export const api = {
   exceptions: () => get<ResultOut[]>("/exceptions"),
   manualReview: () => get<ResultOut[]>("/manual-review"),
   setReason: (resultId: number, reason: string) => send<ResultOut>("PUT", `/manual-review/${resultId}/reason`, { reason }),
-  gdnUpload: (form: FormData) => send<{ rows_read: number; requeued: number }>("POST", "/manual-review/gdn-upload", form),
+  gdnUpload: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return send<{ rows_read: number; requeued: number }>("POST", "/manual-review/gdn-upload", form);
+  },
   setVendorEmail: (id: number, email: string) => send<VendorOut>("PUT", `/vendors/${id}/email`, { email }),
   settings: () => get<SettingsModel>("/settings"),
   saveSettings: (s: SettingsModel) => send<SettingsModel>("PUT", "/settings", s),
@@ -143,6 +147,10 @@ export const api = {
 export const downloadUrl = {
   proforma: (batchId: number) => `${BASE}/batches/${batchId}/proforma.xlsx`,
   report: (batchId: number) => `${BASE}/batches/${batchId}/report.xlsx`,
-  historyExport: () => `${BASE}/email-history/export.xlsx`,
+  /** No filters: the whole history file. With filters: just the matching rows. */
+  historyExport: (f: HistoryFilters = {}) => {
+    const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v) as [string, string][]);
+    return `${BASE}/email-history/export.xlsx${qs.size ? `?${qs}` : ""}`;
+  },
   exceptionsExport: () => `${BASE}/exceptions/export.xlsx`,
 };

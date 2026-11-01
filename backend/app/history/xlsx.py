@@ -11,13 +11,13 @@ from pathlib import Path
 
 from filelock import FileLock  # shortcut: filelock package, the stdlib has no cross-platform file lock; see requirements.txt
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import config
 from app.email_builder.rows import day, inr
 from app.models import EmailHistory
+from app.reports import export
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def _stamp(dt) -> str:
     return dt.strftime("%d-%b-%y %H:%M:%S") if dt else ""
 
 
-def _cells(h: EmailHistory) -> list:
+def cells(h: EmailHistory) -> list:
     """Cells in COLUMNS order. Empty means a truly empty cell (None), never "0" or "n/a"."""
     cells = [_stamp(h.logged_at), h.vendor_name, h.to_email, h.subject, h.invoice_no, inr(h.invoice_amount), h.utr,
              day(h.payment_date), inr(h.amount_paid), inr(h.tds_amount) if h.tds_amount else "",
@@ -42,17 +42,11 @@ def _cells(h: EmailHistory) -> list:
     return [c or None for c in cells]
 
 
+WIDTHS = [20, 28, 30, 44, 14, 16, 22, 14, 16, 14, 18, 28, 12, 18, 18, 20, 36]
+
+
 def _new_workbook() -> Workbook:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Email History"
-    ws.append(COLUMNS)
-    for c in ws[1]:
-        c.font = Font(bold=True)
-    ws.freeze_panes = "A2"
-    for col, w in zip("ABCDEFGHIJKLMNOPQ", (20, 28, 30, 44, 14, 16, 22, 14, 16, 14, 18, 28, 12, 18, 18, 20, 36)):
-        ws.column_dimensions[col].width = w
-    return wb
+    return export.workbook("Email History", COLUMNS, WIDTHS)
 
 
 def _last_id(wb: Workbook) -> int:
@@ -75,10 +69,7 @@ def _write(session: Session, rebuild: bool) -> int:
             return 0
         ws = wb.active
         for h in rows:
-            ws.append(_cells(h))
-            for c in ws[ws.max_row]:
-                if isinstance(c.value, str):
-                    c.data_type = "s"  # vendor-supplied text starting "=" must not become a formula
+            export.append(ws, cells(h))
         wb.properties.description = f"history_last_id={rows[-1].id if rows else last}"
         tmp = path.with_name(path.name + ".tmp")
         try:

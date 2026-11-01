@@ -10,23 +10,18 @@ from app import config
 from app.contract import HistoryStatus
 from app.history import xlsx
 from app.models import EmailHistory, get_db
+from app.reports import export as export_helper
+from app.reports.export import XLSX
 from app.schemas import HistoryOut, RowCountOut
 
 router = APIRouter(prefix="/email-history", tags=["email-history"])
-XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _contains(col, text: str):
     return func.lower(col).contains(text.lower(), autoescape=True)
 
 
-@router.get("", response_model=list[HistoryOut])
-def history(response: Response, date_from: date | None = None, date_to: date | None = None,
-            vendor: str | None = Query(None, max_length=255), status: HistoryStatus | None = None,
-            q: str | None = Query(None, max_length=128, description="part of a UTR or invoice no"),
-            limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
-    """Newest first. Headers: X-Total-Count (rows matching every filter) and X-Status-Counts (JSON, per status,
-    for the date / vendor / search filters only, so the counts stay visible while a status is selected)."""
+def _where(date_from, date_to, vendor, q) -> list:
     # shortcut: the date range compares the stored logged_at as is (server clock), not IST; fix if the DB isn't on IST
     where = []
     if date_from:
@@ -37,20 +32,41 @@ def history(response: Response, date_from: date | None = None, date_to: date | N
         where.append(_contains(EmailHistory.vendor_name, vendor))
     if q:
         where.append(or_(_contains(EmailHistory.utr, q), _contains(EmailHistory.invoice_no, q)))
+    return where
+
+
+def _newest_first(where: list, status: HistoryStatus | None):
+    rows = select(EmailHistory).where(*where)
+    if status:
+        rows = rows.where(EmailHistory.status == status)
+    return rows.order_by(EmailHistory.logged_at.desc(), EmailHistory.id.desc())
+
+
+@router.get("", response_model=list[HistoryOut])
+def history(response: Response, date_from: date | None = None, date_to: date | None = None,
+            vendor: str | None = Query(None, max_length=255), status: HistoryStatus | None = None,
+            q: str | None = Query(None, max_length=128, description="part of a UTR or invoice no"),
+            limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
+    """Newest first. Headers: X-Total-Count (rows matching every filter) and X-Status-Counts (JSON, per status,
+    for the date / vendor / search filters only, so the counts stay visible while a status is selected)."""
+    where = _where(date_from, date_to, vendor, q)
     found = dict(db.execute(select(EmailHistory.status, func.count()).where(*where).group_by(EmailHistory.status)).all())
     counts = {s.value: found.get(s, 0) for s in HistoryStatus}
     response.headers["X-Total-Count"] = str(counts[status.value] if status else sum(counts.values()))
     response.headers["X-Status-Counts"] = json.dumps(counts)
-    rows = select(EmailHistory).where(*where)
-    if status:
-        rows = rows.where(EmailHistory.status == status)
-    rows = rows.order_by(EmailHistory.logged_at.desc(), EmailHistory.id.desc()).limit(limit).offset(offset)
-    return [HistoryOut.model_validate(h, from_attributes=True) for h in db.scalars(rows)]
+    return [HistoryOut.model_validate(h, from_attributes=True) for h in db.scalars(_newest_first(where, status).limit(limit).offset(offset))]
 
 
 @router.get("/export.xlsx")  # declared before /{id} so the literal path wins
-def export(db: Session = Depends(get_db)):
-    """The same file the sender keeps up to date. Catches it up first (never raises), so it is current."""
+def export(date_from: date | None = None, date_to: date | None = None, vendor: str | None = Query(None, max_length=255),
+           status: HistoryStatus | None = None, q: str | None = Query(None, max_length=128), db: Session = Depends(get_db)):
+    """No filters: the same file the sender keeps up to date (caught up first, never raises).
+    Any filter: the matching rows, newest first, in the same columns, built from the database."""
+    if any((date_from, date_to, vendor, status, q)):
+        wb = export_helper.workbook("Email History", xlsx.COLUMNS, xlsx.WIDTHS)
+        for h in db.scalars(_newest_first(_where(date_from, date_to, vendor, q), status)):
+            export_helper.append(wb.active, xlsx.cells(h))
+        return export_helper.response(wb, "email_history_filtered.xlsx")
     xlsx.append_new_rows(db)
     path = Path(config.HISTORY_XLSX_PATH)
     try:
