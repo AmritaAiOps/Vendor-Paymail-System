@@ -129,6 +129,8 @@ def test_reconcile_and_results_endpoints(client, db, queue_calls):
 
     r = client.get(f"/api/batches/{batch_id}/results")
     assert {x["id"]: x["send_on_date"] for x in r.json() if x["send_on_date"]} == {queued.id: "2025-09-18"}
+    assert next(x for x in r.json() if x["id"] == queued.id)["vendor_id"] == queued.vendor_id
+    assert all(x["vendor_id"] is None for x in r.json() if x["exception_type"] == "VENDOR_NOT_FOUND")
     assert r.status_code == 200 and "x-stub" not in r.headers
     assert r.headers["x-total-count"] == "24" and len(r.json()) == 24
     s01 = next(x for x in r.json() if x["invoice_no"] == "INV-S01")

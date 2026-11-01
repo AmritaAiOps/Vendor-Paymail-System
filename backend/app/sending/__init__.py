@@ -39,6 +39,7 @@ class NotConfigured(RuntimeError):
 
 def send_on_date(payment_date: date) -> date:
     """T+2 business days. Every day except Sunday is a business day; holidays are not skipped."""
+    # shortcut: the 2 is fixed, not config.get_setting("send_offset_days"); the contract has no such setting yet
     d, left = payment_date, 2
     while left:
         d += timedelta(days=1)

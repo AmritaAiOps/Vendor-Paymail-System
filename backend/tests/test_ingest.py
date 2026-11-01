@@ -1,4 +1,5 @@
 import io
+import zipfile
 from datetime import date
 from decimal import Decimal
 
@@ -143,3 +144,24 @@ def test_upload_rejects_bad_files_with_reasons(client, db):
     r = client.post("/api/batches", files=upload_files(vendors=("vendors.xlsx", b"PK\x03\x04 not really")))
     assert "can't be read" in r.json()["detail"][0]["message"]
     assert db.query(ConsolidatedEntry).count() == 0  # nothing stored on failure
+
+
+def test_upload_limits(client, db, monkeypatch):
+    monkeypatch.setattr("app.config.MAX_UPLOAD_MB", 1)
+    big = b"PK\x03\x04" + b"\0" * (1024 * 1024)
+    bomb = io.BytesIO()
+    with zipfile.ZipFile(bomb, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("xl/sheet1.xml", b"\0" * (51 * 1024 * 1024))  # compresses to ~50 KB, unpacks past 50x 1 MB
+    r = client.post("/api/batches", files=upload_files(bank=("bank.xlsx", big), tds=("tds.xlsx", b""),
+                                                       gdn=("gdn.xlsx", bomb.getvalue())))
+    problems = {p["file"]: p["message"] for p in r.json()["detail"]}
+    assert r.status_code == 422 and set(problems) == {"bank", "tds", "gdn"}
+    assert "larger than 1 MB" in problems["bank"] and "is empty" in problems["tds"] and "unpacks to" in problems["gdn"]
+    assert db.query(ConsolidatedEntry).count() == 0
+
+
+def test_upload_file_name_is_cleaned(client, db):
+    long_name = "C:\fakepath\\" + "x" * 300 + ".XLSX"
+    r = client.post("/api/batches", files=upload_files(vendors=(long_name, files_from(fx)["vendors"][1])))
+    assert r.status_code == 201, r.text
+    assert r.json()["vendors_file"] == "x" * 250 + ".xlsx"

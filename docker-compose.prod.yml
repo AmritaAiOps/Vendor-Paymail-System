@@ -1,0 +1,57 @@
+# Production: Postgres, the app (API + daily send job), Nginx with the built frontend. Owner: Person A.
+#   docker compose -f docker-compose.prod.yml up -d --build      (README: Production and Operations)
+# Only Nginx is published; the app and the database are reachable only inside this network.
+
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "5"}
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: paymail
+      POSTGRES_USER: paymail
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paymail -d paymail"]
+      interval: 5s
+      retries: 10
+    logging: *logging
+
+  app:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://paymail:${POSTGRES_PASSWORD}@db:5432/paymail
+      HISTORY_XLSX_PATH: /app/data/email_history.xlsx
+    volumes:
+      - appdata:/app/data  # the email history Excel file: back it up with the database
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      start_period: 30s
+    logging: *logging
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/frontend.Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      app:
+        condition: service_healthy
+    logging: *logging
+
+volumes:
+  pgdata:
+  appdata:

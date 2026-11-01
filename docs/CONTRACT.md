@@ -90,7 +90,7 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | GET | /api/email-queue/{id}/preview | B | none | EmailPreview |
 | GET | /api/email-history | B | query: date_from?, date_to? (YYYY-MM-DD, on `logged_at`), vendor? (part of name, any case), status? (HistoryStatus), q? (text search), limit (default 50), offset | list[HistoryOut]; total before paging in header `X-Total-Count`; counts per status as a JSON object in header `X-Status-Counts` |
 | GET | /api/email-history/{id} | B | none | HistoryOut |
-| GET | /api/email-history/export.xlsx | B | none | xlsx |
+| GET | /api/email-history/export.xlsx | B | query: same as GET /api/email-history (date_from, date_to, vendor, status, q) | xlsx; with no filters, the history file as before; with filters, only the matching rows |
 | POST | /api/email-history/rebuild-xlsx | B | none | RowCountOut |
 | GET | /api/exceptions | B | none | list[ResultOut] |
 | GET | /api/exceptions/export.xlsx | B | none | xlsx |
@@ -108,7 +108,7 @@ Model fields, in short (exact types are in `schemas.py`):
 - `BatchSummary` {batch: BatchOut, counts: {ResultStatus: int}, with every status present, files: {consolidated|bank|gdn|tds|vendors: FileReport}}
 - `FileReport` {file_name, rows_read, rows_kept, rows_skipped, rows_rejected, issues: [RowIssue]}. Skipped = dropped on purpose (bank credits, totals rows, duplicate vendors)
 - `RowIssue` {sheet, row (Excel row number), message, rejected: bool}. rejected=false means the row was kept but flagged, e.g. a vendor email that needs checking
-- `ResultOut` {id, batch_id, vendor_name, invoice_no, utr, invoice_value, payment_date, amount_paid, tds_amount, invoice_deduction, reason, status, exception_type, send_on_date}. send_on_date = the queued email's `email_queue.send_on_date`, null if not queued
+- `ResultOut` {id, batch_id, vendor_id, vendor_name, invoice_no, utr, invoice_value, payment_date, amount_paid, tds_amount, invoice_deduction, reason, status, exception_type, send_on_date}. vendor_id = `reconciliation_results.vendor_id` (the matched vendor, null when none matched; the Exceptions page uses it for "Fix email" on INVALID_EMAIL rows). send_on_date = the queued email's `email_queue.send_on_date`, null if not queued
 - `RunNowOut` {sent, failed, dry_run, not_sent}
 - `QueueItemOut` {id, vendor_id, vendor_name, to_email, send_on_date, status, sent_at, subject, invoice_count}
 - `EmailPreview` {subject, html, text}
