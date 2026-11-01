@@ -20,7 +20,7 @@ def results_out(db: Session, *where) -> list[ResultOut]:
          .outerjoin(EmailItem, EmailItem.reconciliation_result_id == ReconciliationResult.id)
          .outerjoin(EmailQueue, EmailQueue.id == EmailItem.email_queue_id)
          .where(*where).order_by(ConsolidatedEntry.batch_id.desc(), ConsolidatedEntry.id))
-    return [ResultOut(id=r.id, batch_id=e.batch_id, vendor_name=e.vendor_name, invoice_no=e.invoice_no, utr=e.utr,
+    return [ResultOut(id=r.id, batch_id=e.batch_id, vendor_id=r.vendor_id, vendor_name=e.vendor_name, invoice_no=e.invoice_no, utr=e.utr,
                       invoice_value=r.invoice_value, payment_date=r.payment_date, amount_paid=r.amount_paid,
                       tds_amount=r.tds_amount, invoice_deduction=r.invoice_deduction, reason=r.reason,
                       status=r.status, exception_type=r.exception_type, send_on_date=sent)
