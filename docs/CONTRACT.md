@@ -34,6 +34,7 @@ cd backend && .venv/Scripts/python -m pytest tests/contract -q
 - **No login.** There are no users or roles; every endpoint is open to anyone who can reach the app. Run it only on a trusted internal network.
 - Stubs: a stub route has `STUB` (from `app/routers/__init__.py`) in its dependencies and answers with header `X-Stub: true` and canned data from the fixture. The owner removes `STUB` when the route becomes real. A stub function is marked `# STUB(contract)`. Don't build on its body. Only its owner edits it.
 - Dev: the frontend's Vite dev server proxies `/api` to `http://localhost:8000`.
+- Foreign keys are enforced on SQLite too (dev and tests), exactly like Postgres: a test that inserts a row must first create the rows it points at (`scripts.seed_fixture.seed` gives a vendor, a batch and three results).
 
 ## (a) Tables: who writes, who reads
 
@@ -41,8 +42,8 @@ cd backend && .venv/Scripts/python -m pytest tests/contract -q
 |---|---|---|
 | `upload_batches`, `consolidated_entries`, `bank_transactions`, `gdn_records`, `tds_records`, `reconciliation_results`, `send_logs` | A | B |
 | `vendors` | A creates rows on upload. B writes only `email` and `is_email_valid` (the email fix) | A, B |
-| `email_queue`, `email_items` | B creates rows (`build_queue`). A updates only `email_queue.status` and `sent_at` | A, B |
-| `email_history` | A only, through one writer function. Append-only: DB triggers reject UPDATE and DELETE | B reads and exports |
+| `email_queue`, `email_items` | B creates rows (`build_queue`), status `PENDING`, `send_on_date` from `sending.send_on_date`. A updates only `email_queue.status`, `sent_at`, and on SENT the `subject` / `body_html` actually sent | A, B |
+| `email_history` | A only, through `sending.record_history`. Append-only: DB triggers reject UPDATE and DELETE | B reads and exports |
 | `audit_log` | A and B, append only | A, B |
 | `app_settings` | Only through `config.get_setting` / `config.set_setting` | Same |
 
@@ -52,7 +53,24 @@ Data rules the screens rely on:
 
 - **Bounced payments.** A bank credit saying `NEFT RETURN-<reason>-<name>-<UTR>` marks the debit with that UTR `bank_transactions.is_bounced = true`, with the return text in `bounce_note`. Reconciliation gives that invoice `status = EXCEPTION`, `exception_type = BOUNCED`, and no email goes out. Its history row is `NOT_SENT` / `BOUNCED`. B shows BOUNCED rows **highlighted** wherever exceptions or history appear.
 - **Vendor emails.** `vendors.email` holds every valid address from "Email ID" and "Email ID- Contact 2", comma-separated; all of them are mailed. If the main Email ID cell doesn't parse cleanly, the original text is kept with `is_email_valid = false` (never guessed). A bad contact-2 cell is ignored and reported.
-- **Vendor names** match ignoring case, spaces, punctuation and Private/Pvt, Limited/Ltd, Company/Co, &/and (`ingest.clean.name_key`): `R.K PHARMA` = `R.K. Pharma`.
+- **Vendor names** match ignoring case, spaces, punctuation and Private/Pvt, Limited/Ltd, Company/Co, &/and (`ingest.clean.name_key`): `R.K PHARMA` = `R.K. Pharma`. If that finds nothing, a looser key that also drops (bracketed) text and company suffixes is tried, but only when it points at exactly one vendor: `PHARMAGIX` = `Pharmagix(A Unit Of White Pharmaceuticals)`, while a company and its CFA (`Aark Pharmaceuticals` / `Aark Pharmaceuticals (Neon Cfa)`) stay unmatched rather than guessed. The matched vendor is stored in `reconciliation_results.vendor_id`; `build_queue` uses that, not the name.
+- **Reconciliation rule** (A's `reconcile.decide`). Exceptions first, in this order: UTR not in the bank debits → `UTR_NOT_FOUND`; bounced → `BOUNCED`; no vendor → `VENDOR_NOT_FOUND`; vendor email invalid → `INVALID_EMAIL`. Then shortfall = invoice value − bank debit, with ₹1 rounding everywhere:
+  - shortfall ≤ ₹1 → `PAID_IN_FULL`
+  - shortfall = TDS (TDS file) → `TDS_ONLY`
+  - shortfall = TDS + GDN debit note(s), or = GDN alone (TDS listed but not cut) → `DEDUCTION`, reason = the GDN narration(s), joined with "; "
+  - shortfall but no debit note → `MANUAL_REVIEW` / `REASON_MISSING` (deduction amount kept for the review page)
+  - TDS > shortfall, overpaid by > ₹1, or a debit note that doesn't match the shortfall → `MANUAL_REVIEW` / `AMOUNT_MISMATCH`
+  - TDS and GDN are matched on vendor + invoice no; if the vendor is spelled differently in that file, on invoice no alone, but only when that invoice no is used by one vendor in both files.
+  - Payment date = bank value date (`reconcile.payment_date`, the one place to change it). Send date = `sending.send_on_date(payment_date)`.
+  - Only `PAID_IN_FULL`, `TDS_ONLY` and `DEDUCTION` results are sendable.
+- **Sending** (A's `sending.run_due`, daily at `send_time` Asia/Kolkata, or `POST /api/scheduler/run-now`). For every `PENDING` queue row with `send_on_date` ≤ today:
+  - claim it `PENDING → SENDING` in one conditional UPDATE (two runs can never take the same row);
+  - skip it (`SKIPPED`) if the vendor email is invalid, any invoice isn't sendable, or any UTR already has a `SENT` history row;
+  - render it with B's `render_email`, then send it, or in DRY_RUN only log it;
+  - finish in one transaction: status `SENT` / `FAILED` (or back to `PENDING` in DRY_RUN), a `send_logs` row and the `email_history` rows.
+  - Only failures where nothing reached the mail server are retried (3 tries, 2 s then 4 s). `FAILED` is final. A row still `SENDING` after a run means it died mid-send: check by hand, it is never resent automatically.
+  - **DRY_RUN is on unless `dry_run` is explicitly false** (env `DRY_RUN` or the setting). `TEST_RECIPIENT` (env) sends everything to one inbox, subject prefixed `[TEST for <vendor emails>]`; those still count as SENT.
+- **History rows** (`email_history`): one per invoice per outcome. `SENT`, `FAILED` (with the error) and `DRY_RUN` from the sender; `NOT_SENT` with `not_sent_reason` = the result's `exception_type`, written by reconciliation for every EXCEPTION / MANUAL_REVIEW invoice. `DRY_RUN` and `NOT_SENT` are written once per UTR (per vendor + invoice without a UTR) and reason; re-runs add nothing. After every reconcile and every send run A calls B's `history.xlsx.append_new_rows`; if it fails, that is logged and nothing else changes.
 
 ## (b) Endpoints
 
@@ -63,9 +81,9 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | GET | /api/health | A | none | HealthOut |
 | POST | /api/batches | A | multipart files: consolidated, bank, gdn, tds, vendors (.xlsx/.xls, ≤ `MAX_UPLOAD_MB` each, default 20) | 201 BatchOut; 422 `detail: [{file, message}]` listing every problem, nothing stored |
 | GET | /api/batches/{id}/summary | A | none | BatchSummary |
-| POST | /api/batches/{id}/reconcile | A | none | BatchSummary |
-| GET | /api/batches/{id}/results | A | none | list[ResultOut] |
-| POST | /api/scheduler/run-now | A | none | RunNowOut |
+| POST | /api/batches/{id}/reconcile | A | none | BatchSummary; re-runnable (results already queued for email are left alone); ends by calling `build_queue(session, batch_id=id)`; 404 if no batch |
+| GET | /api/batches/{id}/results | A | query: status? (ResultStatus), vendor? (part of name, any case), limit (1–500, default 100), offset | list[ResultOut] in consolidated-report order; total before paging in header `X-Total-Count`; 404 if no batch |
+| POST | /api/scheduler/run-now | A | none | RunNowOut (counts of this run); 503 if real sending is on but SMTP isn't configured, nothing touched. No admin check: there is no login |
 | GET | /api/batches/{id}/proforma.xlsx | B | none | xlsx |
 | GET | /api/batches/{id}/report.xlsx | B | none | xlsx |
 | GET | /api/email-queue | B | query: batch_id?, status? (QueueStatus) | list[QueueItemOut] |
@@ -121,11 +139,11 @@ What each one does:
 - `get_setting(name)`: env var `NAME` (upper-case) first, then the `app_settings` row, then the default. Only known names are allowed: `dry_run` (default `"true"`) and `send_time` (default `"10:00"`). KeyError for anything else, so secrets in the environment can't be read through it.
 - `set_setting(name, value)`: upserts the `app_settings` row and appends to `audit_log` in one commit. An env var with the same name still wins on read.
 - `load_gdn_file(file)`: parses a GDN Report workbook (all month sheets) into `GdnRow`s (`contract.py`). It doesn't write to the DB. ValueError if the file isn't a GDN Report.
-- `requeue_after_reason(...)`: sets the reason on a MANUAL_REVIEW result, moves it to DEDUCTION, writes `audit_log`, then calls `build_queue(result_ids=[result_id])`. ValueError if the result isn't MANUAL_REVIEW.
-- `requeue_vendor_exceptions(session, vendor_id)`: re-checks that vendor's VENDOR_NOT_FOUND / INVALID_EMAIL results and queues those that now pass. Returns how many were queued.
+- `requeue_after_reason(...)`: sets the reason on a MANUAL_REVIEW result, moves it to DEDUCTION, writes `audit_log`, then calls `build_queue(result_ids=[result_id])`. A send date already in the past goes out on the next run. ValueError if the result isn't MANUAL_REVIEW, has no deduction to explain (overpaid, or TDS larger than the shortfall), or the reason is empty or over 500 characters.
+- `requeue_vendor_exceptions(session, vendor_id)`: re-checks that vendor's INVALID_EMAIL results and every VENDOR_NOT_FOUND result with the full rule set; those that now match this vendor are updated, and the sendable ones are queued with `build_queue(result_ids=[...])`. Returns how many were queued. ValueError if the vendor doesn't exist. Call it after fixing a vendor's email or adding a vendor.
 - `send_on_date(payment_date)`: the T+2 rule, already real (not a stub). Counts 2 business days after the bank value date, where every day except Sunday is a business day; holidays are not skipped. Fri→Mon, Sat→Tue, Thu→Sat. Nobody computes a send date any other way.
 - `build_queue(...)`: creates `email_queue` (one row per vendor + send date, from `send_on_date`) and `email_items` (one per UTR) for the sendable results of a batch, or for the given results. Skips UTRs already in `email_items`. Returns the new queue ids.
-- `render_email(session, queue_id)`: returns `(subject, html, text)`. Table columns in this order: Invoice No | Invoice Amount | UTR | Payment Date | Amount Paid | TDS Amount | Invoice Deduction | Reason. Empty cells stay empty.
+- `render_email(session, queue_id)`: returns `(subject, html, text)`. Called while the row is `SENDING`; it must not commit or change the queue row. If it raises, that email is marked FAILED. Table columns in this order: Invoice No | Invoice Amount | UTR | Payment Date | Amount Paid | TDS Amount | Invoice Deduction | Reason. Empty cells stay empty.
 - `append_new_rows(session)`: appends `email_history` rows not yet in the Excel file at `config.HISTORY_XLSX_PATH`. `rebuild(session)` rewrites that file from the whole table. Both return a row count.
 
 ## Shared fixture and seed

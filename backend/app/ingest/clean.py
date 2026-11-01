@@ -78,6 +78,18 @@ def name_key(name) -> str:
     return "".join(_NAME_WORDS.get(w, w) for w in re.findall(r"[a-z0-9]+", s))
 
 
+_SUFFIX_WORDS = {"pvt", "private", "ltd", "limited", "llp", "co", "company", "the", "ms", "and"}
+
+
+def loose_name_key(name) -> str:
+    """Looser key for a second-try vendor match: also drops (bracketed) and {braced} text and company suffixes.
+    'PHARMAGIX' == 'Pharmagix(A Unit Of White Pharmaceuticals)'. It can merge distinct vendors (a company and its
+    CFA), so only use it when exactly one vendor matches."""
+    s = re.sub(r"^m/s\b", " ", (clean_str(name) or "").casefold())  # "M/S VALTURE ..." = Messrs
+    s = re.sub(r"[({][^)}]*[)}]?", " ", s.replace("&", " and "))
+    return "".join(w for w in re.findall(r"[a-z0-9]+", s) if w not in _SUFFIX_WORDS)
+
+
 def split_emails(value) -> tuple[list[str], list[str]]:
     """'a@x.com; b@y.com', 'a / b', "'Name' <a@x.com>", 'a@x.com>' -> (valid, invalid) addresses."""
     s = clean_str(value)

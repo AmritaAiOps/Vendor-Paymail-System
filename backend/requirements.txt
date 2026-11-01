@@ -11,5 +11,6 @@ xlrd==2.0.2
 APScheduler==3.11.3
 pytest==9.2.0
 httpx==0.28.1
+tzdata==2026.6
 # --- B ---
 Jinja2==3.1.6
