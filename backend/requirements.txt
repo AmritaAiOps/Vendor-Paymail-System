@@ -14,3 +14,5 @@ httpx==0.28.1
 tzdata==2026.6
 # --- B ---
 Jinja2==3.1.6
+# shortcut: filelock because the stdlib has no cross-platform file lock; swap for msvcrt/fcntl if this dependency is unwanted
+filelock==4.2.6
