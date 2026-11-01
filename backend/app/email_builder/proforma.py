@@ -36,6 +36,7 @@ def proforma_xlsx(session: Session, batch_id: int) -> bytes:
         r += 1
         for i, cells in enumerate(rows):
             for c, v in enumerate(cells, 1):
+                # shortcut: amounts are text to keep Indian grouping; switch to numeric cells when finance wants to sum them
                 put(r, c, v, border=Border(EDGE, EDGE, EDGE, EDGE),
                     alignment=Alignment(horizontal="right" if c - 1 in RIGHT else "left"),
                     fill=PatternFill("solid", fgColor="F5F7FA") if i % 2 else PatternFill())

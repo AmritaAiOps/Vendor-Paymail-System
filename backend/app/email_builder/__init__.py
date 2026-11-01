@@ -11,7 +11,6 @@ from app import config
 from app.contract import QueueStatus
 from app.email_builder.rows import HEADER, row, sendable
 from app.models import ConsolidatedEntry, EmailItem, EmailQueue, ReconciliationResult, Vendor
-from app.sending import send_on_date
 
 COMPANY = "Sudhamayi Enterprises Pvt. Ltd."
 SIGNATURE_PLACEHOLDER = "[Name, designation]"
@@ -22,7 +21,7 @@ _env = Environment(loader=FileSystemLoader(Path(__file__).parent / "templates"),
 def _signature() -> str:
     try:
         return config.get_setting("signature")
-    except KeyError:  # shortcut: config.SETTINGS has no "signature" yet (A owns it); drop this once it does
+    except KeyError:  # shortcut: config.SETTINGS lacks "signature" until A pushes it, drop this try/except when it lands
         return SIGNATURE_PLACEHOLDER
 
 
@@ -30,6 +29,8 @@ def build_queue(session: Session, batch_id: int | None = None, result_ids: list[
     """Create email_queue + email_items rows (one queue row per vendor + send date, one item per UTR)
     for sendable results of a batch, or for the given results. Skips UTRs already in email_items.
     Returns the new email_queue ids."""
+    from app.sending import send_on_date  # here, not at the top: sending imports render_email from this module
+
     found = sendable(session, batch_id, result_ids)
     already = set(session.scalars(select(EmailItem.utr).where(EmailItem.utr.in_([e.utr for _, _, e in found]))))
     groups = defaultdict(list)

@@ -37,21 +37,16 @@ def row(res: ReconciliationResult, entry: ConsolidatedEntry) -> list[str]:
             (res.reason or "") if res.invoice_deduction else ""]  # reason belongs to the deduction only
 
 
-def _key(name: str) -> str:
-    # shortcut: letters and digits only, lower-cased. A's ingest.clean.name_key also folds Pvt/Ltd/Co/&;
-    # we may not import ingest, so ask A for a contract-level vendor id on results if names ever disagree.
-    return re.sub(r"[^a-z0-9]", "", name.lower())
-
-
 def sendable(session: Session, batch_id: int | None = None, result_ids: list[int] | None = None):
     """(Vendor, result, entry) for results that get an email, oldest invoice first. Others are skipped."""
-    q = (select(ReconciliationResult, ConsolidatedEntry)
+    q = (select(Vendor, ReconciliationResult, ConsolidatedEntry)
+         .join(Vendor, Vendor.id == ReconciliationResult.vendor_id)  # set by the engine; no vendor = exception, never sendable
          .join(ConsolidatedEntry, ConsolidatedEntry.id == ReconciliationResult.consolidated_entry_id)
-         .where(ReconciliationResult.status.in_(SENDABLE), ReconciliationResult.payment_date.is_not(None))
+         .where(ReconciliationResult.status.in_(SENDABLE), ReconciliationResult.payment_date.is_not(None),
+                ConsolidatedEntry.utr.is_not(None))
          .order_by(ReconciliationResult.id))
     if batch_id is not None:
         q = q.where(ConsolidatedEntry.batch_id == batch_id)
     if result_ids is not None:
         q = q.where(ReconciliationResult.id.in_(result_ids))
-    vendors = {_key(v.party_name): v for v in session.scalars(select(Vendor))}
-    return [(vendors[k], r, e) for r, e in session.execute(q) if (k := _key(e.vendor_name)) in vendors and e.utr]
+    return [tuple(t) for t in session.execute(q)]

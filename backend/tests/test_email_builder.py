@@ -7,9 +7,17 @@ from sqlalchemy import func, select
 
 from app.email_builder import build_queue, render_email
 from app.email_builder.rows import inr
-from app.models import EmailItem, EmailQueue, ReconciliationResult
-from scripts.seed_fixture import seed
+from app.models import EmailItem, EmailQueue, ReconciliationResult, Vendor
+from scripts.seed_fixture import seed as _seed
 from tests.fixtures import three_row_example as fx
+
+
+def seed(db):
+    # the shared seed doesn't set vendor_id; the engine does in real runs
+    batch_id = _seed(db)
+    db.execute(ReconciliationResult.__table__.update().values(vendor_id=db.scalar(select(Vendor.id))))
+    db.commit()
+    return batch_id
 
 
 class _Table(HTMLParser):
@@ -62,6 +70,13 @@ def test_build_queue_twice_changes_nothing(db):
     all_ids = list(db.scalars(select(ReconciliationResult.id)))
     assert build_queue(db, result_ids=all_ids) == []
     assert (db.scalar(select(func.count(EmailQueue.id))), db.scalar(select(func.count(EmailItem.id)))) == before
+
+
+def test_result_without_vendor_is_not_queued(db):
+    seed(db)
+    db.execute(ReconciliationResult.__table__.update().values(vendor_id=None))
+    db.commit()
+    assert build_queue(db) == []
 
 
 def test_exception_results_are_not_queued(db):
