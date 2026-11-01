@@ -5,13 +5,14 @@ import EmailHistory from "./pages/EmailHistory";
 import EmailQueue from "./pages/EmailQueue";
 import Exceptions from "./pages/Exceptions";
 import ManualReview from "./pages/ManualReview";
+import Settings from "./pages/Settings";
 import { Placeholder } from "./pages/Placeholder";
 import Upload from "./pages/Upload";
 
 // Pages built so far; the rest still show a placeholder
 const built: Record<string, ReactElement> = {
   "/upload": <Upload />, "/batch-results": <BatchResults />, "/email-queue": <EmailQueue />, "/email-history": <EmailHistory />,
-  "/exceptions": <Exceptions />, "/manual-review": <ManualReview />,
+  "/exceptions": <Exceptions />, "/manual-review": <ManualReview />, "/settings": <Settings />,
 };
 
 const pages = [
