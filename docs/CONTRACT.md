@@ -136,7 +136,7 @@ The signature column is checked by the contract test. Module prefixes are droppe
 
 What each one does:
 
-- `get_setting(name)`: env var `NAME` (upper-case) first, then the `app_settings` row, then the default. Only known names are allowed: `dry_run` (default `"true"`) and `send_time` (default `"10:00"`). KeyError for anything else, so secrets in the environment can't be read through it.
+- `get_setting(name)`: env var `NAME` (upper-case) first, then the `app_settings` row, then the default. Only known names are allowed: `dry_run` (default `"true"`), `send_time` (default `"10:00"`) and `signature` (default `"[Name, designation]"`, the sign-off `render_email` puts under the table). KeyError for anything else, so secrets in the environment can't be read through it.
 - `set_setting(name, value)`: upserts the `app_settings` row and appends to `audit_log` in one commit. An env var with the same name still wins on read.
 - `load_gdn_file(file)`: parses a GDN Report workbook (all month sheets) into `GdnRow`s (`contract.py`). It doesn't write to the DB. ValueError if the file isn't a GDN Report.
 - `requeue_after_reason(...)`: sets the reason on a MANUAL_REVIEW result, moves it to DEDUCTION, writes `audit_log`, then calls `build_queue(result_ids=[result_id])`. A send date already in the past goes out on the next run. ValueError if the result isn't MANUAL_REVIEW, has no deduction to explain (overpaid, or TDS larger than the shortfall), or the reason is empty or over 500 characters.
