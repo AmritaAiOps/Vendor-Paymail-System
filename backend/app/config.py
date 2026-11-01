@@ -19,7 +19,7 @@ TEST_RECIPIENT = os.environ.get("TEST_RECIPIENT", "").strip()
 
 # The only keys the app_settings store accepts, with their defaults. Unknown keys are rejected so the
 # settings API can never read or write secrets from the environment.
-SETTINGS = {"dry_run": "true", "send_time": "10:00"}
+SETTINGS = {"dry_run": "true", "send_time": "10:00", "signature": "[Name, designation]"}
 
 
 def get_setting(name: str) -> str:
