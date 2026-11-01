@@ -23,6 +23,7 @@ from app.models import (AuditLog, BankTransaction, ConsolidatedEntry, EmailItem,
 from app.sending import SENDABLE, append_history_xlsx, record_history
 
 ROUNDING = Decimal("1.00")  # differences up to INR 1 are rounding
+# shortcut: fixed, not config.get_setting("rounding_tolerance"); the contract has no such setting yet. Switch when it does.
 
 
 def payment_date(bank: BankTransaction) -> date:

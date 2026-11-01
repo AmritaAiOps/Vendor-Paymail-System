@@ -1,4 +1,6 @@
+import io
 import os
+import zipfile
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile
 from sqlalchemy import func, select
@@ -15,12 +17,25 @@ from app.schemas import BatchOut, BatchSummary, ResultOut
 router = APIRouter(prefix="/batches", tags=["batches"])
 
 _MAGIC = {".xlsx": b"PK\x03\x04", ".xls": b"\xd0\xcf\x11\xe0"}  # zip / OLE2 signatures
+# zip-bomb guard: an .xlsx may unpack to at most 50x the upload limit. The Aug-Sep reference files unpack 4-12x.
+_UNZIP_RATIO = 50
+
+
+def _unzipped_size(data: bytes) -> int:
+    """Total uncompressed size an .xlsx claims. 0 if it isn't a readable zip: the parser reports that later."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            return sum(i.file_size for i in z.infolist())
+    except zipfile.BadZipFile:
+        return 0
 
 
 def _check_upload(kind: str, upload: UploadFile) -> tuple[str, bytes] | dict:
     """(file name, bytes) if the upload looks like a real Excel file within the size limit, else a problem dict."""
-    name = clean_str(upload.filename) or ""
-    ext = os.path.splitext(name)[1].lower()
+    name = (clean_str(upload.filename) or "").replace("\\", "/").rsplit("/", 1)[-1]  # some browsers send a full path
+    stem, ext = os.path.splitext(name)
+    ext = ext.lower()
+    name = stem[:255 - len(ext)] + ext  # fits the String(255) column; Postgres rejects a longer one with a 500
     limit = config.MAX_UPLOAD_MB * 1024 * 1024
     data = upload.file.read(limit + 1)
     problem = None
@@ -34,6 +49,8 @@ def _check_upload(kind: str, upload: UploadFile) -> tuple[str, bytes] | dict:
         problem = f"{name} is password-protected; upload an unprotected copy"
     elif not data.startswith(_MAGIC[ext]):
         problem = f"{name} is not a valid {ext} file"
+    elif ext == ".xlsx" and _unzipped_size(data) > _UNZIP_RATIO * limit:
+        problem = f"{name} unpacks to more than {_UNZIP_RATIO * config.MAX_UPLOAD_MB} MB; it can't be a normal report"
     return {"file": kind, "message": problem} if problem else (name, data)
 
 

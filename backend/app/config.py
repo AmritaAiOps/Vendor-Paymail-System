@@ -4,7 +4,8 @@ import os
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./dev.db")
 HISTORY_XLSX_PATH = os.environ.get("HISTORY_XLSX_PATH", "./data/email_history.xlsx")
 TIMEZONE = "Asia/Kolkata"
-MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "20"))  # per uploaded file
+MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "20"))  # per uploaded file; deploy/nginx.conf caps the body to match
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 SMTP_HOST = os.environ.get("SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
