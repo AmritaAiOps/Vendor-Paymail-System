@@ -28,13 +28,13 @@ def _short(sig: str) -> str:
 def test_endpoints_match_contract():
     documented = {(m, p) for m, p, *_ in _rows("GET|POST|PUT|PATCH|DELETE")}
     actual = {(m.upper(), p) for p, ops in app.openapi()["paths"].items() for m in ops}
-    assert len(documented) == 22
+    assert len(documented) == 23
     assert documented == actual, {"missing": documented - actual, "undocumented": actual - documented}
 
 
 def test_functions_match_contract():
     rows = _rows(r"app(\.\w+)+")
-    assert len(rows) == 10
+    assert len(rows) == 12
     for module, name, sig, *_ in rows:
         fn = getattr(importlib.import_module(module), name, None)
         assert fn is not None, f"{module}.{name} missing"

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app import config
+from app.auth import require_admin
 from app.models import get_db
 from app.schemas import RunNowOut
 from app.sending import NotConfigured, run_due, scheduled_run, send_time
@@ -32,7 +33,7 @@ async def lifespan(app):
 router = APIRouter(prefix="/scheduler", tags=["scheduler"], lifespan=lifespan)
 
 
-@router.post("/run-now", response_model=RunNowOut)
+@router.post("/run-now", response_model=RunNowOut, dependencies=[Depends(require_admin)])
 def run_now(db: Session = Depends(get_db)):
     """Run the T+2 job now. 503 if real sending is on but SMTP isn't configured (nothing is touched)."""
     try:

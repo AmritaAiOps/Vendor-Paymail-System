@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app import config
+from app.auth import require_admin
 from app.contract import HistoryStatus
 from app.history import xlsx
 from app.models import EmailHistory, get_db
@@ -78,9 +79,8 @@ def export(date_from: date | None = None, date_to: date | None = None, vendor: s
     return Response(data, media_type=XLSX, headers={"Content-Disposition": 'attachment; filename="email_history.xlsx"'})
 
 
-@router.post("/rebuild-xlsx", response_model=RowCountOut)
+@router.post("/rebuild-xlsx", response_model=RowCountOut, dependencies=[Depends(require_admin)])
 def rebuild_xlsx(db: Session = Depends(get_db)):
-    # No admin check: the contract has no login or roles yet. Add one here if that changes.
     try:
         return RowCountOut(rows=xlsx.rebuild(db))
     except Exception as err:  # locked by another writer, open in Excel, disk error

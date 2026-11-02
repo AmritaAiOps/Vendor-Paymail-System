@@ -21,6 +21,8 @@
 /backend/app/sending/                 @person-a
 /backend/app/middleware/              @person-a
 /backend/app/config.py                @person-a
+/backend/app/auth/                    @person-a
+/backend/app/routers/auth.py          @person-a
 /backend/app/routers/health.py        @person-a
 /backend/app/routers/batches.py       @person-a
 /backend/app/routers/scheduler.py     @person-a

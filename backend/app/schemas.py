@@ -141,3 +141,9 @@ class SettingsModel(BaseModel):
     dry_run: bool
     send_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")  # HH:MM, IST
     signature: str = Field(max_length=500)  # sign-off under the email table
+
+
+class MeOut(BaseModel):
+    """GET /api/auth/me, and what app.auth.require_viewer / require_admin return."""
+    email: str
+    is_admin: bool

@@ -13,8 +13,8 @@ cd backend && .venv/Scripts/python -m pytest tests/contract -q
 | Path | Owner |
 |---|---|
 | `backend/app/models`, `backend/alembic` (only A writes migrations, one head) | A |
-| `backend/app/ingest`, `reconcile`, `sending`, `middleware`, `config.py`, `backend/scripts` | A |
-| `backend/app/routers/`: `health`, `batches`, `scheduler` | A |
+| `backend/app/ingest`, `reconcile`, `sending`, `middleware`, `auth`, `config.py`, `backend/scripts` | A |
+| `backend/app/routers/`: `health`, `auth`, `batches`, `scheduler` | A |
 | `deploy/`, `docker-compose.prod.yml` | A |
 | `backend/app/email_builder`, `history`, `reports` | B |
 | `backend/app/routers/`: `reports`, `email_queue`, `email_history`, `exceptions`, `manual_review`, `vendors`, `settings` | B |
@@ -31,7 +31,7 @@ cd backend && .venv/Scripts/python -m pytest tests/contract -q
 - Enum values are the UPPERCASE strings in `app/contract.py`. In the DB they are VARCHAR with a CHECK constraint.
 - In API responses, NULL means the cell doesn't apply. The email renders it as an empty cell, never as "0", "n/a" or "No deduction".
 - Errors use FastAPI's default `{"detail": ...}` with a proper 4xx/5xx status.
-- **No login.** There are no users or roles; every endpoint is open to anyone who can reach the app. Run it only on a trusted internal network.
+- **Login is Firebase Authentication.** The frontend signs in with the Firebase JS SDK and sends the Firebase ID token as `Authorization: Bearer <token>` on every /api request. The backend verifies it with firebase-admin (project `FIREBASE_PROJECT_ID`). Every endpoint except GET /api/health needs a valid token from a verified email that is in `ALLOWED_EMAIL_DOMAIN` or `ADMIN_EMAILS` (401 no/bad/expired token, 403 not allowed). Admin = email in `ADMIN_EMAILS`. Admin-only: POST /api/scheduler/run-now, POST /api/email-history/rebuild-xlsx, PUT /api/settings (403 for non-admin).
 - Stubs: a stub route has `STUB` (from `app/routers/__init__.py`) in its dependencies and answers with header `X-Stub: true` and canned data from the fixture. The owner removes `STUB` when the route becomes real. A stub function is marked `# STUB(contract)`. Don't build on its body. Only its owner edits it.
 - Dev: the frontend's Vite dev server proxies `/api` to `http://localhost:8000`.
 - Foreign keys are enforced on SQLite too (dev and tests), exactly like Postgres: a test that inserts a row must first create the rows it points at (`scripts.seed_fixture.seed` gives a vendor, a batch and three results).
@@ -79,11 +79,12 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | Method | Path | Owner | Request | Response |
 |---|---|---|---|---|
 | GET | /api/health | A | none | HealthOut |
+| GET | /api/auth/me | A | none | MeOut |
 | POST | /api/batches | A | multipart files: consolidated, bank, gdn, tds, vendors (.xlsx/.xls, ≤ `MAX_UPLOAD_MB` each, default 20) | 201 BatchOut; 422 `detail: [{file, message}]` listing every problem, nothing stored |
 | GET | /api/batches/{id}/summary | A | none | BatchSummary |
 | POST | /api/batches/{id}/reconcile | A | none | BatchSummary; re-runnable (results already queued for email are left alone); ends by calling `build_queue(session, batch_id=id)`; 404 if no batch |
 | GET | /api/batches/{id}/results | A | query: status? (ResultStatus), vendor? (part of name, any case), limit (1–500, default 100), offset | list[ResultOut] in consolidated-report order; total before paging in header `X-Total-Count`; 404 if no batch |
-| POST | /api/scheduler/run-now | A | none | RunNowOut (counts of this run); 503 if real sending is on but SMTP isn't configured, nothing touched. No admin check: there is no login |
+| POST | /api/scheduler/run-now | A | none | RunNowOut (counts of this run); 503 if real sending is on but SMTP isn't configured, nothing touched. (admin) |
 | GET | /api/batches/{id}/proforma.xlsx | B | none | xlsx |
 | GET | /api/batches/{id}/report.xlsx | B | none | xlsx |
 | GET | /api/email-queue | B | query: batch_id?, status? (QueueStatus) | list[QueueItemOut] |
@@ -91,7 +92,7 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | GET | /api/email-history | B | query: date_from?, date_to? (YYYY-MM-DD, on `logged_at`), vendor? (part of name, any case), status? (HistoryStatus), q? (text search), limit (default 50), offset | list[HistoryOut]; total before paging in header `X-Total-Count`; counts per status as a JSON object in header `X-Status-Counts` |
 | GET | /api/email-history/{id} | B | none | HistoryOut |
 | GET | /api/email-history/export.xlsx | B | query: same as GET /api/email-history (date_from, date_to, vendor, status, q) | xlsx; with no filters, the history file as before; with filters, only the matching rows |
-| POST | /api/email-history/rebuild-xlsx | B | none | RowCountOut |
+| POST | /api/email-history/rebuild-xlsx | B | none | RowCountOut (admin) |
 | GET | /api/exceptions | B | none | list[ResultOut] |
 | GET | /api/exceptions/export.xlsx | B | none | xlsx |
 | GET | /api/manual-review | B | none | list[ResultOut] |
@@ -99,11 +100,12 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | POST | /api/manual-review/gdn-upload | B | multipart file: file | GdnUploadOut |
 | PUT | /api/vendors/{id}/email | B | VendorEmailIn | VendorOut |
 | GET | /api/settings | B | none | SettingsModel |
-| PUT | /api/settings | B | SettingsModel | SettingsModel |
+| PUT | /api/settings | B | SettingsModel | SettingsModel (admin) |
 
 Model fields, in short (exact types are in `schemas.py`):
 
 - `HealthOut` {status}
+- `MeOut` {email, is_admin}
 - `BatchOut` {id, uploaded_at, consolidated_file, bank_file, gdn_file, tds_file, vendors_file, status, error_message}
 - `BatchSummary` {batch: BatchOut, counts: {ResultStatus: int}, with every status present, files: {consolidated|bank|gdn|tds|vendors: FileReport}}
 - `FileReport` {file_name, rows_read, rows_kept, rows_skipped, rows_rejected, issues: [RowIssue]}. Skipped = dropped on purpose (bank credits, totals rows, duplicate vendors)
@@ -123,6 +125,8 @@ The signature column is checked by the contract test. Module prefixes are droppe
 
 | Module | Name | Signature | Owner | Caller |
 |---|---|---|---|---|
+| app.auth | require_viewer | `(request: Request) -> MeOut` | A | A, B (main.py, every router but health) |
+| app.auth | require_admin | `(request: Request) -> MeOut` | A | A, B (the three admin routes) |
 | app.config | get_setting | `(name: str) -> str` | A | A, B |
 | app.config | set_setting | `(name: str, value: str) -> None` | A | B (settings page) |
 | app.ingest | load_gdn_file | `(file: BinaryIO) -> list[GdnRow]` | A | B (gdn-upload) |

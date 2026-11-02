@@ -1,8 +1,9 @@
 import os
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app import config
+from app.auth import require_admin
 from app.schemas import SettingsModel
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -25,10 +26,10 @@ def get_settings():
     return _current()
 
 
-@router.put("", response_model=SettingsModel)
+@router.put("", response_model=SettingsModel, dependencies=[Depends(require_admin)])
 def put_settings(body: SettingsModel):
     """send_time format and signature length are checked by SettingsModel (422). Only changed values are saved;
-    config.set_setting writes one audit_log row per change. No admin check: the contract has no login or roles."""
+    config.set_setting writes one audit_log row per change. Admin only."""
     signature = body.signature.strip()
     if not signature:
         raise HTTPException(422, "Signature can't be empty")
