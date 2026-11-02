@@ -44,6 +44,11 @@ services:
     build:
       context: .
       dockerfile: deploy/frontend.Dockerfile
+      args:
+        VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY:?set VITE_FIREBASE_API_KEY in .env}
+        VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN:?set VITE_FIREBASE_AUTH_DOMAIN in .env}
+        VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:?set VITE_FIREBASE_PROJECT_ID in .env}
+        VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID:?set VITE_FIREBASE_APP_ID in .env}
     restart: unless-stopped
     ports:
       - "${HTTP_PORT:-80}:80"

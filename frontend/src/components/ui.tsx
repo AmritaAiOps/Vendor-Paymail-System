@@ -1,5 +1,5 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import { errorMessage, isStub } from "../api/client";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { download, errorMessage, isStub } from "../api/client";
 
 export const focusRing = "outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-1";
 export const btn = `rounded border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50 ${focusRing}`;
@@ -61,7 +61,18 @@ export function Pager({ offset, limit, total, onChange }: { offset: number; limi
 }
 
 export function DownloadLink({ href, children }: { href: string; children: ReactNode }) {
-  return <a href={href} download className={`inline-block ${btn}`}>{children}</a>;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const click = () => {
+    setBusy(true); setError(null);
+    download(href).catch(setError).finally(() => setBusy(false));
+  };
+  return (
+    <span className="inline-flex items-center gap-2">
+      <button type="button" className={btn} disabled={busy} onClick={click}>{children}</button>
+      {error !== null && <span role="alert" className="text-sm text-red-800">{errorMessage(error)}</span>}
+    </span>
+  );
 }
 
 /** Native <dialog>: Esc closes, focus is trapped and restored by the browser. */

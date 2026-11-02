@@ -1,9 +1,21 @@
 // The only module that talks to the backend. Paths are exactly those in docs/CONTRACT.md (b).
 // Money is a string in JSON (never float); keep it a string until display.
+import { signOut } from "firebase/auth";
+import { auth } from "../firebase";
+
 const BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
-let authToken: string | null = null;
-export const setAuthToken = (t: string | null) => { authToken = t; };
+/** Firebase's current ID token (the SDK refreshes it); never stored by us. */
+async function authHeader(): Promise<Record<string, string>> {
+  const token = await auth.currentUser?.getIdToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/** 401 = token missing or rejected: sign out, and onAuthStateChanged brings back the login screen. */
+function failed(status: number, detail: unknown): ApiError {
+  if (status === 401) signOut(auth);
+  return new ApiError(status, detail);
+}
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: unknown) {
@@ -30,8 +42,7 @@ type Query = Record<string, string | number | undefined>;
 async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<{ data: T; res: Response }> {
   const qs = new URLSearchParams();
   Object.entries(query ?? {}).forEach(([k, v]) => v !== undefined && v !== "" && qs.set(k, String(v)));
-  const headers: Record<string, string> = {};
-  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  const headers = await authHeader();
   let payload: BodyInit | undefined;
   if (body instanceof FormData) payload = body;
   else if (body !== undefined) { headers["Content-Type"] = "application/json"; payload = JSON.stringify(body); }
@@ -44,7 +55,7 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
   }
   if (!res.ok) {
     const data = await res.json().catch(() => null);
-    throw new ApiError(res.status, data?.detail ?? res.statusText);
+    throw failed(res.status, data?.detail ?? res.statusText);
   }
   noteStub(path, res.headers.get("X-Stub"));
   return { data: res.status === 204 ? (undefined as T) : await res.json(), res };
@@ -54,18 +65,19 @@ const get = async <T>(p: string, q?: Query) => (await request<T>("GET", p, undef
 const send = async <T>(m: string, p: string, b?: unknown) => (await request<T>(m, p, b)).data;
 
 // fetch has no upload progress, so the batch upload uses XMLHttpRequest.
-function upload<T>(path: string, form: FormData, onProgress: (pct: number) => void): Promise<T> {
+async function upload<T>(path: string, form: FormData, onProgress: (pct: number) => void): Promise<T> {
+  const headers = await authHeader();
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${BASE}${path}`);
-    if (authToken) xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
+    Object.entries(headers).forEach(([k, v]) => xhr.setRequestHeader(k, v));
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 100));
     xhr.onerror = () => reject(new ApiError(0, "Cannot reach the server"));
     xhr.onload = () => {
       let data: any = null;
       try { data = JSON.parse(xhr.responseText); } catch { /* non-JSON error body */ }
       if (xhr.status >= 200 && xhr.status < 300) { noteStub(path, xhr.getResponseHeader("X-Stub")); resolve(data as T); }
-      else reject(new ApiError(xhr.status, data?.detail ?? xhr.statusText));
+      else reject(failed(xhr.status, data?.detail ?? xhr.statusText));
     };
     xhr.send(form);
   });
@@ -100,12 +112,14 @@ export type HistoryFilters = { date_from?: string; date_to?: string; vendor?: st
 export type VendorOut = { id: number; party_name: string; email: string | null; is_email_valid: boolean };
 export type SettingsModel = { dry_run: boolean; send_time: string; signature: string };
 export type RunNowOut = { sent: number; failed: number; dry_run: number; not_sent: number };
+export type MeOut = { email: string; is_admin: boolean };
 
 export const UPLOAD_FIELDS = ["consolidated", "bank", "gdn", "tds", "vendors"] as const;
 export type UploadField = (typeof UPLOAD_FIELDS)[number];
 
 export const api = {
   health: () => get<{ status: string }>("/health"),
+  me: () => get<MeOut>("/auth/me"),
   uploadBatch: (files: Record<UploadField, File>, onProgress: (pct: number) => void) => {
     const form = new FormData();
     UPLOAD_FIELDS.forEach((f) => form.append(f, files[f]));
@@ -143,7 +157,17 @@ export const api = {
   saveSettings: (s: SettingsModel) => send<SettingsModel>("PUT", "/settings", s),
 };
 
-// Excel downloads are plain links (the browser handles the file); paths per contract.
+/** Fetch an Excel file with the auth header and hand it to the browser (a plain link can't carry the token). */
+export async function download(url: string): Promise<void> {
+  const res = await fetch(url, { headers: await authHeader() }).catch(() => { throw new ApiError(0, "Cannot reach the server"); });
+  if (!res.ok) throw failed(res.status, (await res.json().catch(() => null))?.detail ?? res.statusText);
+  const name = /filename="?([^";]+)"?/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? "download.xlsx";
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(await res.blob()), download: name });
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// Excel download URLs for download(); paths per contract.
 export const downloadUrl = {
   proforma: (batchId: number) => `${BASE}/batches/${batchId}/proforma.xlsx`,
   report: (batchId: number) => `${BASE}/batches/${batchId}/report.xlsx`,

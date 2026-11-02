@@ -3,9 +3,10 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig(({ mode }) => {
-  // Backend port is 8000 (docs/CONTRACT.md); override with VITE_BACKEND_URL in frontend/.env.local
-  const env = loadEnv(mode, ".", "");
+  // Env comes from the repo-root .env (VITE_FIREBASE_*, and VITE_BACKEND_URL to override the backend at :8000)
+  const env = loadEnv(mode, "..", "");
   return {
+    envDir: "..",
     plugins: [react(), tailwindcss()],
     server: { proxy: { "/api": env.VITE_BACKEND_URL || "http://localhost:8000" } },
     test: { environment: "node" },

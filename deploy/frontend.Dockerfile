@@ -4,6 +4,8 @@ WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
+# Firebase web config is public and baked into the bundle at build time (docker-compose.prod.yml passes it from .env)
+ARG VITE_FIREBASE_API_KEY VITE_FIREBASE_AUTH_DOMAIN VITE_FIREBASE_PROJECT_ID VITE_FIREBASE_APP_ID
 RUN npm run build
 
 FROM nginx:1.28-alpine

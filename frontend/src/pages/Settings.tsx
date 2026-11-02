@@ -2,10 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api, errorMessage, type SettingsModel } from "../api/client";
 import { ErrorBox, Loading, StubTag, btn, btnPrimary, input } from "../components/ui";
+import { useMe } from "../lib/useAuth";
 
 const MAX_SIGNATURE = 500;
 
-function SettingsForm({ saved }: { saved: SettingsModel }) {
+function SettingsForm({ saved, readOnly }: { saved: SettingsModel; readOnly: boolean }) {
   const qc = useQueryClient();
   const [dryRun, setDryRun] = useState(saved.dry_run);
   const save = useMutation({
@@ -22,7 +23,8 @@ function SettingsForm({ saved }: { saved: SettingsModel }) {
 
   return (
     <form className="mt-4 grid max-w-xl gap-4" onSubmit={submit} onChange={() => save.reset()}>
-      <fieldset className={`rounded-lg border-2 p-3 ${dryRun ? "border-blue-300 bg-blue-50" : "border-red-500 bg-red-50"}`}>
+      {readOnly && <p className="text-sm text-slate-600">Only admins can change settings.</p>}
+      <fieldset disabled={readOnly} className={`rounded-lg border-2 p-3 ${dryRun ? "border-blue-300 bg-blue-50" : "border-red-500 bg-red-50"}`}>
         <legend className="px-1 font-semibold">Dry run</legend>
         <label className="flex items-center gap-2 text-base font-medium">
           <input type="checkbox" name="dry_run" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} className="h-5 w-5" aria-describedby="dry-run-note" />
@@ -37,19 +39,20 @@ function SettingsForm({ saved }: { saved: SettingsModel }) {
 
       <div className="grid gap-1">
         <label htmlFor="send_time" className="font-medium">Daily send time (IST)</label>
-        <input id="send_time" name="send_time" type="time" required defaultValue={saved.send_time} className={`${input} w-36`} />
+        <input id="send_time" name="send_time" type="time" required disabled={readOnly} defaultValue={saved.send_time} className={`${input} w-36`} />
       </div>
 
       <div className="grid gap-1">
         <label htmlFor="signature" className="font-medium">Signature under the email table</label>
-        <input id="signature" name="signature" required maxLength={MAX_SIGNATURE} defaultValue={saved.signature} className={input}
+        <input id="signature" name="signature" required disabled={readOnly} maxLength={MAX_SIGNATURE} defaultValue={saved.signature} className={input}
           pattern=".*\S.*" title="Signature can't be empty" />
       </div>
 
-      <div className="flex items-center gap-3">
+      {/* Hiding admin controls is comfort only: the server refuses them for non-admins */}
+      {!readOnly && <div className="flex items-center gap-3">
         <button type="submit" className={btnPrimary} disabled={save.isPending}>{save.isPending ? "Saving…" : "Save settings"}</button>
         <p role="status" className="text-sm text-green-800">{save.isSuccess && "Saved."}</p>
-      </div>
+      </div>}
       {save.isError && <ErrorBox error={save.error} />}
     </form>
   );
@@ -85,13 +88,14 @@ function Actions({ dryRun }: { dryRun: boolean }) {
 
 export default function Settings() {
   const q = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  const isAdmin = useMe().data?.is_admin ?? false;
   return (
     <section>
       <h1 className="text-xl font-semibold">Settings<StubTag path="/settings" /></h1>
       <p className="mt-1 text-slate-600">A value set in the server environment wins; saving it here is refused.</p>
       {q.isPending && <Loading what="Loading settings" />}
       {q.isError && <div className="mt-4"><ErrorBox error={q.error} /></div>}
-      {q.data && <><SettingsForm saved={q.data} /><Actions dryRun={q.data.dry_run} /></>}
+      {q.data && <><SettingsForm saved={q.data} readOnly={!isAdmin} />{isAdmin && <Actions dryRun={q.data.dry_run} />}</>}
     </section>
   );
 }

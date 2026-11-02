@@ -7,7 +7,7 @@ The interface between the two tracks is in [docs/CONTRACT.md](docs/CONTRACT.md).
 Layout: `backend/` (FastAPI, Person A + B), `frontend/` (React + Vite, Person B), `deploy/` (Nginx and the frontend image, Person A).
 `.env.example` and `backend/requirements.txt` have `# --- A ---` / `# --- B ---` blocks. Edit only your own block.
 
-> **No login yet.** Anyone who can reach the app can use it, including sending emails. Run it only on the trusted internal network until Firebase login lands.
+> **Login is Firebase Authentication.** Set up the Firebase project first (console steps at the top of [docs/FIREBASE_AUTH_PROMPTS.md](docs/FIREBASE_AUTH_PROMPTS.md)): turn on Email/Password, add the users by hand (there is no sign-up screen), copy the web app config into the `VITE_FIREBASE_*` variables. Viewers are verified emails at `ALLOWED_EMAIL_DOMAIN`; admins (Run now, Rebuild history file, saving Settings) are listed in `ADMIN_EMAILS`. Without `FIREBASE_PROJECT_ID` every API route except health answers 503.
 
 ## Backend (dev, SQLite)
 
@@ -49,6 +49,8 @@ docker compose -f docker-compose.prod.yml up -d --build
 sh deploy/smoke.sh          # health, routes, headers, 413 body cap, 429 upload rate limit
 ```
 
+Firebase ID tokens are bearer credentials: put TLS in front of Nginx (or add a TLS server block) before anyone signs in over a network you don't trust.
+
 Run exactly **one** `app` container: the send job runs inside it. Two would both run it; the queue claim stops double sends, but there is no reason for it.
 
 ### Environment variables
@@ -70,6 +72,10 @@ Secrets come only from the environment (`.env`, never committed). The settings p
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `HTTP_PORT` | `80` | Port Nginx publishes |
 | `HISTORY_XLSX_PATH` | `./data/email_history.xlsx` | Set by `docker-compose.prod.yml` to the `appdata` volume |
+| `FIREBASE_PROJECT_ID` | none (required) | Firebase project whose ID tokens the API accepts. Empty = every route but health answers 503 |
+| `ALLOWED_EMAIL_DOMAIN` | empty | Verified emails at this domain (no `@`) can sign in as viewers |
+| `ADMIN_EMAILS` | empty | Comma-separated. Admins can also run the send job now, rebuild the history file and change settings |
+| `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID` | none (required) | Firebase web app config (public). Baked into the frontend at build time: rebuild `web` after changing |
 
 ## Operations runbook
 
