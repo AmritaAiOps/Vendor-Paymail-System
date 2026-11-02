@@ -17,6 +17,11 @@ SMTP_STARTTLS = os.environ.get("SMTP_STARTTLS", "true").strip().lower() not in (
 # When set, every email goes to this inbox instead of the vendor (testing only; the send still counts as SENT)
 TEST_RECIPIENT = os.environ.get("TEST_RECIPIENT", "").strip()
 
+# Firebase login (app.auth). Env only, never in app_settings. Empty project ID = every protected route answers 503.
+FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "").strip()
+ALLOWED_EMAIL_DOMAIN = os.environ.get("ALLOWED_EMAIL_DOMAIN", "").strip().lower().lstrip("@")
+ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
+
 
 # The only keys the app_settings store accepts, with their defaults. Unknown keys are rejected so the
 # settings API can never read or write secrets from the environment.

@@ -5,8 +5,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.auth import require_admin, require_viewer
 from app.main import app
 from app.models import get_db
+from app.schemas import MeOut
 
 
 @pytest.fixture
@@ -26,5 +28,8 @@ def db(tmp_path, monkeypatch):
 def client(db):
     """API client whose requests use the test database."""
     app.dependency_overrides[get_db] = lambda: db
+    signed_in = lambda: MeOut(email="admin@example.com", is_admin=True)  # tests/test_auth.py tests the real checks
+    app.dependency_overrides[require_viewer] = signed_in
+    app.dependency_overrides[require_admin] = signed_in
     yield TestClient(app)
     app.dependency_overrides.clear()

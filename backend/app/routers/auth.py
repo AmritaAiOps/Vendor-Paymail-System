@@ -1,11 +1,11 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-from app.routers import STUB
+from app.auth import require_viewer
 from app.schemas import MeOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.get("/me", response_model=MeOut, dependencies=[STUB])
-def me():
-    return MeOut(email="stub-admin@example.com", is_admin=True)
+@router.get("/me", response_model=MeOut)
+def me(user: MeOut = Depends(require_viewer)):  # same call as the router-level check, so FastAPI runs it once
+    return user
