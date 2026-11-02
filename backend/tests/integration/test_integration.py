@@ -36,6 +36,7 @@ def upload_and_reconcile(client, fixture) -> int:
     assert r.status_code == 201, r.text
     batch_id = r.json()["id"]
     assert client.post(f"/api/batches/{batch_id}/reconcile").status_code == 200
+    assert client.post("/api/email-queue/schedule", params={"batch_id": batch_id}).status_code == 200  # Send all
     return batch_id
 
 
@@ -82,6 +83,23 @@ def test_step5_upload_reconcile_queue_send_and_preview_cells(client, db, hist, s
         assert table(p.json()["html"]) == expected[q["send_on_date"]]  # cell by cell, empty cells included
     sent_tables = sorted(table(m.get_body(("html",)).get_content()) for m in smtp.sent)
     assert sent_tables == sorted(expected.values())  # what went out is what the preview shows
+
+
+def test_reconcile_drafts_and_send_all_schedules_for_t_plus_2(client, db, hist, smtp, monkeypatch):
+    monkeypatch.setenv("DRY_RUN", "false")
+    r = client.post("/api/batches", files=files_from(fx))
+    batch_id = r.json()["id"]
+    client.post(f"/api/batches/{batch_id}/reconcile")
+    statuses = lambda: sorted(q["status"] for q in client.get("/api/email-queue").json())
+    assert statuses() == ["DRAFT", "DRAFT"]
+    assert client.post("/api/scheduler/run-now").json()["sent"] == 0 and smtp.sent == []  # drafts never go
+
+    assert client.post("/api/email-queue/schedule", params={"batch_id": 999}).json() == {"scheduled": 0}
+    assert client.post("/api/email-queue/schedule", params={"batch_id": batch_id}).json() == {"scheduled": 2}
+    assert statuses() == ["PENDING", "PENDING"]
+    assert client.post("/api/email-queue/schedule").json() == {"scheduled": 0}  # nothing left to schedule
+    assert run_due(db, min(fx.SEND_ON_DATES.values()))["sent"] == 1  # each on its own T+2 date
+    assert client.post("/api/scheduler/run-now").json()["sent"] == 1
 
 
 def test_step6_rerun_reconcile_and_scheduler_add_nothing(client, db, hist, smtp, monkeypatch):

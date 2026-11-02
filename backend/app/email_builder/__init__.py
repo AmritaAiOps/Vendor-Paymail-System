@@ -33,13 +33,14 @@ def build_queue(session: Session, batch_id: int | None = None, result_ids: list[
 
     new_ids = []
     for (vendor_id, due), items in groups.items():
-        # a still-pending email for the same vendor and day takes the new rows, so they stay one email
+        # a draft for the same vendor and day takes the new rows, so they stay one email. Never a scheduled
+        # (PENDING) one: what Send all approved must not grow without being approved again.
         queue = session.scalar(select(EmailQueue).where(
-            EmailQueue.vendor_id == vendor_id, EmailQueue.send_on_date == due, EmailQueue.status == QueueStatus.PENDING))
+            EmailQueue.vendor_id == vendor_id, EmailQueue.send_on_date == due, EmailQueue.status == QueueStatus.DRAFT))
         created = queue is None
         try:
             if created:
-                queue = EmailQueue(vendor_id=vendor_id, send_on_date=due, status=QueueStatus.PENDING)
+                queue = EmailQueue(vendor_id=vendor_id, send_on_date=due, status=QueueStatus.DRAFT)
                 session.add(queue)
                 session.flush()
             session.add_all(EmailItem(email_queue_id=queue.id, reconciliation_result_id=res.id, utr=entry.utr)

@@ -1,7 +1,7 @@
 """Reconciliation results as API rows and as an Excel report (used by exceptions, manual review and the batch report)."""
 from fastapi import Response
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import exists, func, select
+from sqlalchemy.orm import Session, aliased
 
 from app.email_builder.rows import day, inr
 from app.models import ConsolidatedEntry, EmailItem, EmailQueue, ReconciliationResult
@@ -12,14 +12,31 @@ HEADERS = ["Vendor", "Invoice No", "Invoice Amount", "UTR", "Payment Date", "Amo
            "Invoice Deduction", "Reason", "Status", "Exception Type", "Send Date"]
 
 
-def results_out(db: Session, *where) -> list[ResultOut]:
+def _query(*where):
+    return (select(ReconciliationResult, ConsolidatedEntry, EmailQueue.send_on_date)
+            .join(ConsolidatedEntry, ConsolidatedEntry.id == ReconciliationResult.consolidated_entry_id)
+            .outerjoin(EmailItem, EmailItem.reconciliation_result_id == ReconciliationResult.id)
+            .outerjoin(EmailQueue, EmailQueue.id == EmailItem.email_queue_id)
+            .where(*where))
+
+
+def latest_only():
+    """Leaves out a result when a newer, reconciled batch has the same vendor and invoice: the newer batch's
+    result replaces it. So re-uploading after fixing the vendor list clears the old exception, and the same
+    invoice in two batches shows once on the exceptions and manual review pages."""
+    newer, newer_result = aliased(ConsolidatedEntry), aliased(ReconciliationResult)
+    return ~exists().where(newer.vendor_name == ConsolidatedEntry.vendor_name, newer.invoice_no == ConsolidatedEntry.invoice_no,
+                           newer.batch_id > ConsolidatedEntry.batch_id, newer_result.consolidated_entry_id == newer.id)
+
+
+def results_count(db: Session, *where) -> int:
+    return db.scalar(select(func.count()).select_from(_query(*where).subquery()))
+
+
+def results_out(db: Session, *where, limit: int | None = None, offset: int = 0) -> list[ResultOut]:
     """ResultOut rows for the matching results: newest batch first, report order inside a batch.
     send_on_date is the queued email's date, null if not queued."""
-    q = (select(ReconciliationResult, ConsolidatedEntry, EmailQueue.send_on_date)
-         .join(ConsolidatedEntry, ConsolidatedEntry.id == ReconciliationResult.consolidated_entry_id)
-         .outerjoin(EmailItem, EmailItem.reconciliation_result_id == ReconciliationResult.id)
-         .outerjoin(EmailQueue, EmailQueue.id == EmailItem.email_queue_id)
-         .where(*where).order_by(ConsolidatedEntry.batch_id.desc(), ConsolidatedEntry.id))
+    q = _query(*where).order_by(ConsolidatedEntry.batch_id.desc(), ConsolidatedEntry.id).limit(limit).offset(offset)
     return [ResultOut(id=r.id, batch_id=e.batch_id, vendor_id=r.vendor_id, vendor_name=e.vendor_name, invoice_no=e.invoice_no, utr=e.utr,
                       invoice_value=r.invoice_value, payment_date=r.payment_date, amount_paid=r.amount_paid,
                       tds_amount=r.tds_amount, invoice_deduction=r.invoice_deduction, reason=r.reason,

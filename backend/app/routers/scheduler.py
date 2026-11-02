@@ -12,22 +12,37 @@ from app.schemas import RunNowOut
 from app.sending import NotConfigured, run_due, scheduled_run, send_time
 
 
+_running: BackgroundScheduler | None = None
+
+
+def _trigger() -> CronTrigger:
+    hour, minute = send_time()
+    return CronTrigger(hour=hour, minute=minute, timezone=config.TIMEZONE)
+
+
 def build_scheduler() -> BackgroundScheduler:
     """The daily T+2 job at send_time, Asia/Kolkata. Several app workers each run one; the claim step in
-    run_due makes that safe. shortcut: send_time is read at startup, so changing it needs a restart."""
-    hour, minute = send_time()
+    run_due makes that safe."""
     scheduler = BackgroundScheduler(timezone=config.TIMEZONE)
-    scheduler.add_job(scheduled_run, CronTrigger(hour=hour, minute=minute, timezone=config.TIMEZONE),
-                      id="t_plus_2_send", coalesce=True, max_instances=1, misfire_grace_time=3600)
+    scheduler.add_job(scheduled_run, _trigger(), id="t_plus_2_send", coalesce=True, max_instances=1, misfire_grace_time=3600)
     return scheduler
+
+
+def reschedule() -> None:
+    """Move the daily job to the current send_time (called after Settings saves it).
+    ponytail: only this worker's job moves; with several workers the others keep the old time until restart."""
+    if _running is not None:
+        _running.reschedule_job("t_plus_2_send", trigger=_trigger())
 
 
 @contextlib.asynccontextmanager
 async def lifespan(app):
-    scheduler = build_scheduler()
-    scheduler.start()
+    global _running
+    _running = build_scheduler()
+    _running.start()
     yield
-    scheduler.shutdown(wait=False)
+    _running.shutdown(wait=False)
+    _running = None
 
 
 router = APIRouter(prefix="/scheduler", tags=["scheduler"], lifespan=lifespan)

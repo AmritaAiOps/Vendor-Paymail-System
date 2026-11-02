@@ -69,25 +69,52 @@ def parse_date(value) -> date | None:
 
 
 _NAME_WORDS = {"private": "pvt", "limited": "ltd", "company": "co"}
+_P_LTD = re.compile(r"\bp\b(?=[\s.)]*(?:ltd|limited)\b)")  # "P Ltd" / "P. Ltd" / "(P) Ltd" = Private Limited
+
+
+def _name_text(name) -> str:
+    return _P_LTD.sub("pvt", (clean_str(name) or "").casefold().replace("&", " and "))
+
+
+def _name_words(name) -> list[str]:
+    return [_NAME_WORDS.get(w, w) for w in re.findall(r"[a-z0-9]+", re.sub(r"\{[^}]*\}", " ", _name_text(name)))]
 
 
 def name_key(name) -> str:
     """Vendor-name match key: case, spaces and punctuation ignored, common suffixes unified, {codes} dropped.
-    'R.K PHARMA' == 'R.K. Pharma'; 'A.C SURGIPHARMA PVT. LTD' == 'A.C Surgipharma Private Limited'."""
-    s = re.sub(r"\{[^}]*\}", " ", (clean_str(name) or "").casefold().replace("&", " and "))
-    return "".join(_NAME_WORDS.get(w, w) for w in re.findall(r"[a-z0-9]+", s))
+    'R.K PHARMA' == 'R.K. Pharma'; 'A.C SURGIPHARMA PVT. LTD' == 'A.C Surgipharma Private Limited' == '... P Ltd'."""
+    return "".join(_name_words(name))
 
 
 _SUFFIX_WORDS = {"pvt", "private", "ltd", "limited", "llp", "co", "company", "the", "ms", "and"}
+
+
+def bare_name_key(name) -> str:
+    """name_key without company suffixes, (bracketed) text kept: 'AARK PHARMACEUTICALS PRIVATE LIMITED' ==
+    'Aark Pharmaceuticals' but != 'Aark Pharmaceuticals (Neon Cfa)'. Picks among several loose matches."""
+    return "".join(w for w in _name_words(name) if w not in _SUFFIX_WORDS)
+
+
+def cfa_company_key(name) -> str | None:
+    """The company a CFA entry forwards for, as a loose key: 'Bansal Medical Hall (Macleods Cfa)' -> 'macleods'.
+    None unless the name has a '(<company> CFA)' bracket."""
+    m = re.search(r"\(([^()]*?)\bc\.?\s*f\.?\s*a\.?\s*\)", (clean_str(name) or "").casefold())
+    return loose_name_key(m.group(1)) or None if m else None
 
 
 def loose_name_key(name) -> str:
     """Looser key for a second-try vendor match: also drops (bracketed) and {braced} text and company suffixes.
     'PHARMAGIX' == 'Pharmagix(A Unit Of White Pharmaceuticals)'. It can merge distinct vendors (a company and its
     CFA), so only use it when exactly one vendor matches."""
-    s = re.sub(r"^m/s\b", " ", (clean_str(name) or "").casefold())  # "M/S VALTURE ..." = Messrs
-    s = re.sub(r"[({][^)}]*[)}]?", " ", s.replace("&", " and "))
-    return "".join(w for w in re.findall(r"[a-z0-9]+", s) if w not in _SUFFIX_WORDS)
+    s = re.sub(r"^m/s\b", " ", _name_text(name))  # "M/S VALTURE ..." = Messrs
+    s = re.sub(r"[({][^)}]*[)}]?", " ", s)
+    # "MANKIND PHARMA LIMITED DL": a trailing branch location. ponytail: Delhi only, add other states as they show up
+    s = re.sub(r"\b(?:dl|delhi)\W*$", " ", s)
+    s = re.sub(r"\s-+\s*cfa\b.*$", " ", s)  # "Varenyam Healthcare - Cfa", "Win Medicare ... - Cfa Delhi"
+    s = re.sub(r"['’]s\b", "s", s)  # "Dr. Reddy's" == "DR. REDDYS", "Trader'S" == "TRADERS"
+    # plural "s" dropped: 'N.R.I. HEALTH AIDS' == 'Nri Health Aid', 'Chemical' == 'Chemicals'
+    return "".join(w[:-1] if len(w) > 3 and w.endswith("s") else w
+                   for w in re.findall(r"[a-z0-9]+", s) if w not in _SUFFIX_WORDS)
 
 
 def split_emails(value) -> tuple[list[str], list[str]]:

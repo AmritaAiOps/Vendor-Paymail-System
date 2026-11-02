@@ -9,4 +9,4 @@ RUN useradd --system --uid 10001 app && mkdir -p /app/data && chown app /app/dat
 USER app
 EXPOSE 8000
 # One process: the daily send job runs inside it (APScheduler). Nginx writes the access log, so uvicorn's is off.
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.middleware.asgi:app --host 0.0.0.0 --port 8000 --no-access-log"]
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log"]

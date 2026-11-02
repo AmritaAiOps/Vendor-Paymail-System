@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.contract import BatchStatus, ExceptionType as Ex, HistoryStatus, ResultStatus as St
 from app.email_builder import build_queue
-from app.ingest.clean import clean_str, loose_name_key, name_key
+from app.ingest.clean import bare_name_key, cfa_company_key, clean_str, loose_name_key, name_key
 from app.models import (AuditLog, BankTransaction, ConsolidatedEntry, EmailItem, GdnRecord, ReconciliationResult,
                         TdsRecord, UploadBatch, Vendor)
 from app.sending import SENDABLE, append_history_xlsx, record_history
@@ -105,19 +105,34 @@ class _ByInvoice:
 
 
 class _Vendors:
-    """Vendor lookup: exact name_key first; else the loose key, but only if it points at exactly one vendor."""
+    """Vendor lookup: exact name_key first; else the loose key, but only if it points at exactly one vendor, or
+    exactly one of its matches differs from the name only by company suffixes (a company vs its "(... CFA)"), or
+    all its matches have the same email (two rows of one company: nothing to guess). Last resort: the one CFA entry
+    naming the company, 'Bansal Medical Hall (Macleods Cfa)' for 'Macleods
+    Pharmaceuticals Ltd'. ponytail: prefix match on the bracket text, a two-letter bracket could over-match."""
 
     def __init__(self, vendors):
-        self.exact, self.loose = {}, defaultdict(list)
+        self.exact, self.loose, self.cfa = {}, defaultdict(list), []
         for v in vendors:
             self.exact[name_key(v.party_name)] = v
             self.loose[loose_name_key(v.party_name)].append(v)
+            if company := cfa_company_key(v.party_name):
+                self.cfa.append((company, v))
 
     def find(self, name: str | None) -> Vendor | None:
         if not name:
             return None
-        found = self.loose.get(loose_name_key(name), [])
-        return self.exact.get(name_key(name)) or (found[0] if len(found) == 1 else None)
+        if vendor := self.exact.get(name_key(name)):
+            return vendor
+        loose = loose_name_key(name)
+        found = self.loose.get(loose, [])
+        if len(found) > 1:
+            same_email = len({(v.email or "").casefold() for v in found}) == 1
+            bare = [v for v in found if bare_name_key(v.party_name) == bare_name_key(name)]
+            found = bare if len(bare) == 1 else found[:1] if same_email else []
+        if not found:
+            found = [v for company, v in self.cfa if loose.startswith(company)]
+        return found[0] if len(found) == 1 else None
 
 
 class _Batch:

@@ -1,5 +1,5 @@
 """Structured logging and the global error handler. Owner: Person A.
-install(app) wires both onto the app; the production server loads it through app.middleware.asgi."""
+install(app) wires both onto the app; main.py calls it."""
 import json
 import logging
 import uuid

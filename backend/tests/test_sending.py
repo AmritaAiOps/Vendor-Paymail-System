@@ -45,8 +45,8 @@ class FakeSMTP:
 def smtp(monkeypatch):
     FakeSMTP.sent, FakeSMTP.connects, FakeSMTP.fail_connects, FakeSMTP.fail_send = [], 0, 0, None
     monkeypatch.setattr("app.sending.smtp.smtplib.SMTP", FakeSMTP)
-    monkeypatch.setattr(config, "SMTP_HOST", "smtp.test")
-    monkeypatch.setattr(config, "SMTP_FROM", "payments@sudhamayi.example")
+    monkeypatch.setenv("SMTP_HOST", "smtp.test")
+    monkeypatch.setenv("SMTP_FROM", "payments@sudhamayi.example")
     monkeypatch.setattr(config, "TEST_RECIPIENT", "")
     monkeypatch.delenv("DRY_RUN", raising=False)
     sleeps = []
@@ -210,7 +210,7 @@ def test_invalid_vendor_email_is_skipped(db, smtp, no_build_queue, live):
 
 def test_refuses_to_send_without_smtp(db, smtp, no_build_queue, live, monkeypatch):
     queue_fixture(db)
-    monkeypatch.setattr(config, "SMTP_HOST", "")
+    monkeypatch.delenv("SMTP_HOST", raising=False)
     with pytest.raises(NotConfigured):
         run_due(db, ALL_DUE)
     assert {q.status for q in db.scalars(select(EmailQueue))} == {"PENDING"}  # nothing claimed
@@ -233,10 +233,10 @@ def test_not_sent_history_once_per_utr_and_reason(db, no_build_queue):
     blocked = db.scalar(select(func.count()).select_from(ReconciliationResult)
                         .where(ReconciliationResult.status.in_(("EXCEPTION", "MANUAL_REVIEW"))))
     rows = history(db, "NOT_SENT")
-    assert len(rows) == blocked == 13
+    assert len(rows) == blocked == 12  # S24 now matches its vendor
     assert {(h.invoice_no, h.not_sent_reason) for h in rows} >= {("INV-S13", "BOUNCED"), ("INV-S12", "UTR_NOT_FOUND")}
     reconcile_batch(db, batch.id)
-    assert len(history(db, "NOT_SENT")) == 13  # a re-run adds nothing
+    assert len(history(db, "NOT_SENT")) == 12  # a re-run adds nothing
 
 
 def test_every_outcome_has_exactly_one_history_row(db, smtp, no_build_queue, live):
@@ -288,7 +288,6 @@ def test_requeue_vendor_exceptions(db, no_build_queue):
     db.commit()
     assert requeue_vendor_exceptions(db, unknown.id) == 1
     assert result_for(db, "INV-S08").vendor_id == unknown.id
-    assert result_for(db, "INV-S24").status == "EXCEPTION"  # Nova Labs: still ambiguous, untouched
     assert requeue_vendor_exceptions(db, unknown.id) == 0  # nothing left
     with pytest.raises(ValueError):
         requeue_vendor_exceptions(db, 999)
@@ -300,7 +299,7 @@ def test_run_now_endpoint(client, db, smtp, no_build_queue, monkeypatch):
     assert r.status_code == 200 and "x-stub" not in r.headers
     assert r.json() == {"sent": 0, "failed": 0, "dry_run": 2, "not_sent": 0}  # DRY_RUN by default
     monkeypatch.setenv("DRY_RUN", "false")
-    monkeypatch.setattr(config, "SMTP_HOST", "")
+    monkeypatch.delenv("SMTP_HOST", raising=False)
     r = client.post("/api/scheduler/run-now")
     assert r.status_code == 503 and "SMTP" in r.json()["detail"]
 
@@ -312,3 +311,13 @@ def test_scheduler_job_uses_send_time(monkeypatch):
     assert str(job.trigger) == "cron[hour='9', minute='30']" and str(job.trigger.timezone) == "Asia/Kolkata"
     monkeypatch.setenv("SEND_TIME", "nonsense")
     assert str(build_scheduler().get_job("t_plus_2_send").trigger) == "cron[hour='10', minute='0']"
+
+
+def test_saving_send_time_moves_the_running_job(monkeypatch):
+    from app.routers import scheduler
+    monkeypatch.delenv("SEND_TIME", raising=False)
+    running = scheduler.build_scheduler()
+    monkeypatch.setattr(scheduler, "_running", running)
+    monkeypatch.setattr(scheduler, "send_time", lambda: (7, 45))
+    scheduler.reschedule()
+    assert str(running.get_job("t_plus_2_send").trigger) == "cron[hour='7', minute='45']"

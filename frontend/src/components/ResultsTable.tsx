@@ -1,14 +1,14 @@
 import type { ReactNode } from "react";
 import type { ResultOut } from "../api/client";
 import { formatDate, formatMoney } from "../lib/format";
-import { num, td, th } from "./ui";
+import { card, num, td, th } from "./ui";
 
 /** The plain results table shared by Exceptions and Manual review. `extra` adds one trailing column. */
 export function ResultsTable({ rows, caption, extraHeader, extra }: {
   rows: ResultOut[]; caption: string; extraHeader?: string; extra?: (r: ResultOut) => ReactNode;
 }) {
   return (
-    <div className="overflow-x-auto">
+    <div className={`${card} animate-fade-up overflow-x-auto`}>
       <table className="w-full border-collapse text-sm">
         <caption className="sr-only">{caption}</caption>
         <thead><tr>

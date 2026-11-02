@@ -1,12 +1,18 @@
 """Test helpers: turn a fixture module's source rows into uploaded files."""
 import io
 
-import pandas as pd
+from openpyxl import Workbook
 
 
 def xlsx(rows: list[dict]) -> bytes:
+    """One sheet: a header row (every key, first-seen order), then the rows. Missing keys are empty cells."""
+    headers = list(dict.fromkeys(k for r in rows for k in r))
+    wb = Workbook()
+    wb.active.append(headers)
+    for r in rows:
+        wb.active.append([r.get(h) for h in headers])
     buf = io.BytesIO()
-    pd.DataFrame(rows).to_excel(buf, index=False)
+    wb.save(buf)
     return buf.getvalue()
 
 

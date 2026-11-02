@@ -12,8 +12,7 @@ def clean_env(monkeypatch):
     for name in ("DRY_RUN", "SEND_TIME", "SIGNATURE"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("SMTP_PASSWORD", SECRET)
-    monkeypatch.setattr(config, "SMTP_PASSWORD", SECRET)
-    monkeypatch.setattr(config, "SMTP_USER", SECRET)
+    monkeypatch.setenv("SMTP_USER", SECRET)
 
 
 def test_defaults_and_save_audits_each_change(client, db):

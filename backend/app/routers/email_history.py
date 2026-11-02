@@ -23,7 +23,7 @@ def _contains(col, text: str):
 
 
 def _where(date_from, date_to, vendor, q) -> list:
-    # shortcut: the date range compares the stored logged_at as is (server clock), not IST; fix if the DB isn't on IST
+    # logged_at is stored in IST (config.now_ist), so whole IST days compare directly
     where = []
     if date_from:
         where.append(EmailHistory.logged_at >= datetime.combine(date_from, time.min))

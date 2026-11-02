@@ -8,7 +8,7 @@ export function formatMoney(v: string | number | null | undefined): string {
   return inr.format(Number(v));
 }
 
-// ISO datetime -> "05-Aug-26 14:30" (text slice, no timezone shift). Date-only input gives just the date.
+// ISO datetime -> "05-Aug-26 14:30". The backend stores every timestamp in IST, so the clock time is shown as is.
 export function formatDateTime(iso: string | null | undefined): string {
   const t = /T(\d{2}:\d{2})/.exec(iso ?? "");
   return t ? `${formatDate(iso)} ${t[1]}` : formatDate(iso);

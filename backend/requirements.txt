@@ -5,9 +5,9 @@ python-multipart==0.0.32
 SQLAlchemy==2.1.6
 alembic==1.20.1
 psycopg[binary]==3.3.6
-pandas==3.1.0
 openpyxl==3.1.5
 xlrd==2.0.2
+msoffcrypto-tool==6.0.0
 APScheduler==3.11.3
 pytest==9.2.0
 httpx==0.28.1

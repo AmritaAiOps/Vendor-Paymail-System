@@ -117,7 +117,7 @@ def test_reconcile_and_results_endpoints(client, db, queue_calls):
     r = client.post(f"/api/batches/{batch_id}/reconcile")
     assert r.status_code == 200 and "x-stub" not in r.headers
     counts = r.json()["counts"]
-    assert counts == {"PAID_IN_FULL": 6, "TDS_ONLY": 2, "DEDUCTION": 3, "EXCEPTION": 6, "MANUAL_REVIEW": 7}
+    assert counts == {"PAID_IN_FULL": 7, "TDS_ONLY": 2, "DEDUCTION": 3, "EXCEPTION": 5, "MANUAL_REVIEW": 7}
     assert r.json()["batch"]["status"] == "RECONCILED"
 
     queued = db.scalars(select(ReconciliationResult).where(ReconciliationResult.vendor_id.is_not(None))).first()

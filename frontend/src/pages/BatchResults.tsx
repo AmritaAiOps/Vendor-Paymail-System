@@ -1,8 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, downloadUrl, type ResultOut, type ResultStatus } from "../api/client";
-import { DownloadLink, Empty, ErrorBox, Loading, Pager, RESULT_BADGE, StatusBadge, StubTag, btn, input, num, td, th, focusRing } from "../components/ui";
+import { api, downloadUrl, errorMessage, type ResultOut, type ResultStatus } from "../api/client";
+import { btn, btnPrimary, card, DownloadLink, Empty, ErrorBox, focusRing, input, Loading, num, Pager, pageTitle, RESULT_BADGE, Spinner, StatusBadge, td, th } from "../components/ui";
 import { formatDate, formatMoney } from "../lib/format";
 import { getLastBatch, setLastBatch } from "../lib/lastBatch";
 
@@ -16,7 +16,7 @@ async function fetchAll(id: number): Promise<ResultOut[]> {
   for (;;) {
     const { rows, total } = await api.batchResultsPage(id, FETCH, out.length);
     out.push(...rows);
-    if (total === null || rows.length === 0 || out.length >= total) return out;
+    if (rows.length === 0 || out.length >= total) return out;
   }
 }
 
@@ -51,13 +51,28 @@ function BatchPicker({ id }: { id?: number }) {
   );
 }
 
+/** For a batch that was uploaded but never reconciled (e.g. the user left the Upload page). */
+function ReconcileNow({ id }: { id: number }) {
+  const qc = useQueryClient();
+  const run = useMutation({ mutationFn: () => api.reconcile(id), onSuccess: () => qc.invalidateQueries() });
+  return (
+    <div role="status" className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+      <span className="flex-1">This batch was uploaded but not reconciled yet.</span>
+      <button className={btnPrimary} onClick={() => run.mutate()} disabled={run.isPending}>
+        {run.isPending ? <><Spinner />Reconciling…</> : "Run reconciliation"}
+      </button>
+      {run.isError && <span role="alert" className="w-full text-rose-700">{errorMessage(run.error)}</span>}
+    </div>
+  );
+}
+
 export default function BatchResults() {
   const params = useParams();
   const id = params.id ? Number(params.id) : getLastBatch() ?? undefined;
   const valid = id !== undefined && Number.isInteger(id) && id > 0;
-  useEffect(() => { if (valid) setLastBatch(id); }, [valid, id]);
-
   const summary = useQuery({ queryKey: ["summary", id], queryFn: () => api.batchSummary(id!), enabled: valid });
+  // Remember only a batch that exists, so a mistyped number doesn't become the default
+  useEffect(() => { if (summary.isSuccess) setLastBatch(id!); }, [summary.isSuccess, id]);
   const results = useQuery({ queryKey: ["results", id], queryFn: () => fetchAll(id!), enabled: valid });
 
   const [sort, setSort] = useState<{ key: Key; dir: 1 | -1 }>({ key: "vendor_name", dir: 1 });
@@ -89,11 +104,11 @@ export default function BatchResults() {
   return (
     <section>
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <h1 className="text-xl font-semibold">Batch results{valid && ` · batch ${id}`}<StubTag path={`/batches/${id}/results`} /></h1>
+        <h1 className={pageTitle}>Batch results{valid && ` · batch ${id}`}</h1>
         <BatchPicker id={valid ? id : undefined} />
       </div>
 
-      {!valid && <div className="mt-4"><Empty>No batch yet. <Link to="/upload" className="underline">Upload files</Link> or enter a batch number above.</Empty></div>}
+      {!valid && <div className="mt-4"><Empty>No batch yet. <Link to="/upload" className="font-medium text-indigo-600 underline-offset-2 hover:underline">Upload files</Link> or enter a batch number above.</Empty></div>}
 
       {valid && (<>
         <div className="mt-4 flex flex-wrap gap-2">
@@ -103,16 +118,17 @@ export default function BatchResults() {
         </div>
 
         {summary.isError && <div className="mt-4"><ErrorBox error={summary.error} /></div>}
+        {summary.data?.batch.status === "UPLOADED" && <ReconcileNow id={id} />}
         <ul className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5" aria-label="Summary">
           {summary.isPending ? <li className="col-span-full"><Loading what="Loading summary" /></li> : cards.map(([label, n]) => (
-            <li key={label} className="rounded border border-slate-200 bg-white p-3">
-              <div className="text-xs uppercase tracking-wide text-slate-600">{label}</div>
-              <div className="text-2xl font-semibold tabular-nums">{n?.toLocaleString("en-IN")}</div>
+            <li key={label} className={`${card} p-4`}>
+              <div className="text-xs text-slate-500">{label}</div>
+              <div className="mt-1 font-mono text-2xl font-semibold tabular-nums text-slate-900">{n?.toLocaleString("en-IN")}</div>
             </li>
           ))}
         </ul>
 
-        <form className="mt-6 flex flex-wrap items-end gap-3" onSubmit={(e) => e.preventDefault()} aria-label="Filter results">
+        <form className={`${card} mt-6 flex flex-wrap items-end gap-3 p-4 text-slate-500`} onSubmit={(e) => e.preventDefault()} aria-label="Filter results">
           <label className="text-sm">Vendor<br /><input className={input} value={vendor} onChange={(e) => change(setVendor)(e.target.value)} /></label>
           <label className="text-sm">Invoice or UTR<br /><input className={input} value={search} onChange={(e) => change(setSearch)(e.target.value)} /></label>
           <label className="text-sm">Status<br />
@@ -125,16 +141,16 @@ export default function BatchResults() {
 
         {results.isPending && <Loading what="Loading results" />}
         {results.isError && <ErrorBox error={results.error} />}
-        {results.data && (rows.length === 0 ? <div className="mt-4"><Empty>{results.data.length === 0 ? "This batch has no results yet. Run reconciliation first." : "No rows match these filters."}</Empty></div> : (
+        {results.data && (rows.length === 0 ? <div className="mt-4"><Empty>{results.data.length === 0 ? "This batch has no results yet. Run reconciliation above." : "No rows match these filters."}</Empty></div> : (
           <>
-            <div className="mt-3 overflow-x-auto">
+            <div className={`${card} mt-3 animate-fade-up overflow-x-auto`}>
               <table className="w-full border-collapse text-sm">
                 <caption className="sr-only">Reconciliation results, {rows.length} rows</caption>
                 <thead><tr>
                   {COLS.map((c) => (
                     <th key={c.key} scope="col" className={`${th} ${c.money ? num : ""}`}
                       aria-sort={sort.key === c.key ? (sort.dir === 1 ? "ascending" : "descending") : "none"}>
-                      <button className={`font-semibold uppercase ${focusRing}`} onClick={() => { setSort((s) => ({ key: c.key, dir: s.key === c.key && s.dir === 1 ? -1 : 1 })); setOffset(0); }}>
+                      <button className={`rounded font-semibold uppercase transition hover:text-indigo-700 ${focusRing}`} onClick={() => { setSort((s) => ({ key: c.key, dir: s.key === c.key && s.dir === 1 ? -1 : 1 })); setOffset(0); }}>
                         {c.label}{sort.key === c.key ? (sort.dir === 1 ? " ▲" : " ▼") : ""}
                       </button>
                     </th>

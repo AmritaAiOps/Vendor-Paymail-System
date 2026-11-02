@@ -11,15 +11,16 @@ Only failures where nothing reached the mail server are retried. A row left in S
 mid-send; it is never retried automatically, because the mail may already have gone."""
 import logging
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import exists, select, update
 from sqlalchemy.orm import Session
 
 from app import config
-from app.contract import ExceptionType, HistoryStatus, QueueStatus, ResultStatus
+from app.contract import ExceptionType, HistoryStatus, QueueStatus
 from app.email_builder import render_email
+from app.email_builder.rows import SENDABLE
 from app.history import xlsx
 from app.ingest.clean import split_emails
 from app.models import (ConsolidatedEntry, EmailHistory, EmailItem, EmailQueue, ReconciliationResult, SendLog,
@@ -28,7 +29,6 @@ from app.sending.smtp import SendError, deliver
 
 log = logging.getLogger(__name__)
 
-SENDABLE = {ResultStatus.PAID_IN_FULL, ResultStatus.TDS_ONLY, ResultStatus.DEDUCTION}
 ATTEMPTS = 3  # tries per email, only for failures where nothing reached the server
 BACKOFF_SECONDS = 2  # waits 2 s, then 4 s
 
@@ -57,8 +57,9 @@ def dry_run() -> bool:
     return config.get_setting("dry_run").strip().lower() not in ("false", "0", "no", "off")
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+def smtp_ready() -> bool:
+    s = config.smtp()
+    return bool(s["host"] and s["from"])
 
 
 def _is(column, value):
@@ -95,8 +96,8 @@ def run_due(session: Session, on: date | None = None) -> dict:
     """Send everything due on or before `on` (default: today in Asia/Kolkata). Returns counts per outcome."""
     on = on or today()
     dry = dry_run()
-    if not dry and not (config.SMTP_HOST and config.SMTP_FROM):
-        raise NotConfigured("SMTP_HOST / SMTP_FROM not set: refusing to send (DRY_RUN=true previews instead)")
+    if not dry and not smtp_ready():
+        raise NotConfigured("SMTP isn't set up (Settings → Email server: host and from address): refusing to send")
     counts = {"sent": 0, "failed": 0, "dry_run": 0, "not_sent": 0}
     due = session.scalars(select(EmailQueue.id)
                           .where(EmailQueue.status == QueueStatus.PENDING, EmailQueue.send_on_date <= on)
@@ -172,7 +173,7 @@ def _send_one(session: Session, queue_id: int, dry: bool) -> str:
             log.warning("email_queue %s attempt %s failed, retrying: %s", queue_id, attempt, e)
             time.sleep(BACKOFF_SECONDS * 2 ** (attempt - 1))
 
-    now = _utcnow()
+    now = config.now_ist()
     queue.status, queue.sent_at, queue.subject, queue.body_html = QueueStatus.SENT, now, subject, html
     session.add(SendLog(email_queue_id=queue_id, status=HistoryStatus.SENT, error_message=error))
     record_history(session, HistoryStatus.SENT, items, queue=queue, to_email=", ".join(to), subject=subject, sent_at=now)

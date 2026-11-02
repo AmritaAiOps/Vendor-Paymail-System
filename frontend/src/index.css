@@ -1,1 +1,58 @@
 @import "tailwindcss";
+
+@theme {
+  --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --animate-fade-up: fade-up 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-fade-in: fade-in 0.25s ease-out both;
+  --animate-pop: pop 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pop {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+  }
+}
+
+@layer base {
+  html { color-scheme: light; }
+  body {
+    @apply bg-slate-50 text-slate-700 antialiased;
+    /* Faint indigo glow at the top, as in the design */
+    background-image: radial-gradient(ellipse 60% 260px at 50% -40px, rgb(99 102 241 / 0.10), transparent);
+    background-repeat: no-repeat;
+  }
+  ::selection { @apply bg-indigo-100 text-indigo-900; }
+  h1, h2, h3 { @apply font-display text-slate-900; }
+
+  /* Table rows light up under the pointer; a row's own background (e.g. BOUNCED) still wins */
+  tbody tr { transition: background-color 150ms; }
+  tbody tr:hover { @apply bg-indigo-50/40; }
+
+  dialog[open] { animation: var(--animate-pop); }
+  dialog::backdrop { animation: var(--animate-fade-in); backdrop-filter: blur(3px); }
+
+  details > summary { @apply rounded-md transition-colors hover:text-indigo-700; }
+}
+
+/* Honour the OS "reduce motion" setting everywhere */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

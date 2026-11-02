@@ -116,6 +116,10 @@ class RowCountOut(BaseModel):
     rows: int
 
 
+class ScheduledOut(BaseModel):
+    scheduled: int  # DRAFT emails moved to PENDING by Send all
+
+
 class ReasonIn(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
@@ -141,6 +145,29 @@ class SettingsModel(BaseModel):
     dry_run: bool
     send_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")  # HH:MM, IST
     signature: str = Field(max_length=500)  # sign-off under the email table
+
+
+class SmtpSettingsIn(BaseModel):
+    """PUT /api/settings/smtp. password: None or "" keeps the saved one (it is never sent back)."""
+    host: str = Field(max_length=255)
+    port: int = Field(ge=1, le=65535)
+    user: str = Field(max_length=255)
+    password: str | None = Field(None, max_length=255)
+    from_email: str = Field(max_length=255)
+    from_name: str = Field(max_length=255)
+    starttls: bool
+
+
+class SmtpSettingsOut(BaseModel):
+    """GET/PUT /api/settings/smtp. locked = fields set in the server environment (they win; edit them there)."""
+    host: str
+    port: int
+    user: str
+    password_set: bool
+    from_email: str
+    from_name: str
+    starttls: bool
+    locked: list[str]
 
 
 class MeOut(BaseModel):

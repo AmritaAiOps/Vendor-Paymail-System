@@ -1,6 +1,6 @@
 # Contract: Person A (Engine) ↔ Person B (Delivery)
 
-Frozen at tag `foundation-v1`. Any change: stop, write it up, both people agree, then update this file, `backend/app/schemas.py` / `contract.py` and the stubs in the same commit. Nobody changes it silently.
+Frozen at tag `foundation-v1`. Any change: stop, write it up, both people agree, then update this file and `backend/app/schemas.py` / `contract.py` in the same commit. Nobody changes it silently.
 
 The Pydantic models in `backend/app/schemas.py` are this contract in code. `backend/tests/contract/test_contract.py` reads the endpoint table (b) and the function table (c) **from this file** and checks them against the running app. Both people run it before finishing any phase and again after the merge:
 
@@ -20,9 +20,7 @@ cd backend && .venv/Scripts/python -m pytest tests/contract -q
 | `backend/app/routers/`: `reports`, `email_queue`, `email_history`, `exceptions`, `manual_review`, `vendors`, `settings` | B |
 | `frontend/` | B |
 | `.env.example`, `backend/requirements.txt` | Each person edits only their own `# --- A ---` / `# --- B ---` block |
-| `backend/app/main.py`, `contract.py`, `schemas.py`, `routers/__init__.py`, `backend/tests/contract/`, `backend/tests/fixtures/`, this file | Shared, frozen |
-
-`.github/CODEOWNERS` mirrors this table.
+| `backend/app/main.py`, `contract.py`, `schemas.py`, `backend/tests/contract/`, `backend/tests/fixtures/`, this file | Shared, frozen |
 
 ## Conventions
 
@@ -31,8 +29,7 @@ cd backend && .venv/Scripts/python -m pytest tests/contract -q
 - Enum values are the UPPERCASE strings in `app/contract.py`. In the DB they are VARCHAR with a CHECK constraint.
 - In API responses, NULL means the cell doesn't apply. The email renders it as an empty cell, never as "0", "n/a" or "No deduction".
 - Errors use FastAPI's default `{"detail": ...}` with a proper 4xx/5xx status.
-- **Login is Firebase Authentication.** The frontend signs in with the Firebase JS SDK and sends the Firebase ID token as `Authorization: Bearer <token>` on every /api request. The backend verifies it with firebase-admin (project `FIREBASE_PROJECT_ID`). Every endpoint except GET /api/health needs a valid token from a verified email that is in `ALLOWED_EMAIL_DOMAIN` or `ADMIN_EMAILS` (401 no/bad/expired token, 403 not allowed). Admin = email in `ADMIN_EMAILS`. Admin-only: POST /api/scheduler/run-now, POST /api/email-history/rebuild-xlsx, PUT /api/settings (403 for non-admin).
-- Stubs: a stub route has `STUB` (from `app/routers/__init__.py`) in its dependencies and answers with header `X-Stub: true` and canned data from the fixture. The owner removes `STUB` when the route becomes real. A stub function is marked `# STUB(contract)`. Don't build on its body. Only its owner edits it.
+- **Login is Firebase Authentication.** The frontend signs in with the Firebase JS SDK and sends the Firebase ID token as `Authorization: Bearer <token>` on every /api request. The backend verifies it with firebase-admin (project `FIREBASE_PROJECT_ID`). Every endpoint except GET /api/health needs a valid token from a verified email that is in `ALLOWED_EMAIL_DOMAIN` or `ADMIN_EMAILS` (401 no/bad/expired token, 403 not allowed). Admin = email in `ADMIN_EMAILS`. Admin-only: POST /api/scheduler/run-now, POST /api/email-history/rebuild-xlsx, PUT /api/settings, GET/PUT /api/settings/smtp, POST /api/settings/smtp/test (403 for non-admin).
 - Dev: the frontend's Vite dev server proxies `/api` to `http://localhost:8000`.
 - Foreign keys are enforced on SQLite too (dev and tests), exactly like Postgres: a test that inserts a row must first create the rows it points at (`scripts.seed_fixture.seed` gives a vendor, a batch and three results).
 
@@ -42,7 +39,7 @@ cd backend && .venv/Scripts/python -m pytest tests/contract -q
 |---|---|---|
 | `upload_batches`, `consolidated_entries`, `bank_transactions`, `gdn_records`, `tds_records`, `reconciliation_results`, `send_logs` | A | B |
 | `vendors` | A creates rows on upload. B writes only `email` and `is_email_valid` (the email fix) | A, B |
-| `email_queue`, `email_items` | B creates rows (`build_queue`), status `PENDING`, `send_on_date` from `sending.send_on_date`. A updates only `email_queue.status`, `sent_at`, and on SENT the `subject` / `body_html` actually sent | A, B |
+| `email_queue`, `email_items` | B creates rows (`build_queue`), status `DRAFT` (B's `POST /api/email-queue/schedule` moves them to `PENDING`), `send_on_date` from `sending.send_on_date`. A updates only `email_queue.status`, `sent_at`, and on SENT the `subject` / `body_html` actually sent | A, B |
 | `email_history` | A only, through `sending.record_history`. Append-only: DB triggers reject UPDATE and DELETE | B reads and exports |
 | `audit_log` | A and B, append only | A, B |
 | `app_settings` | Only through `config.get_setting` / `config.set_setting` | Same |
@@ -63,7 +60,7 @@ Data rules the screens rely on:
   - TDS and GDN are matched on vendor + invoice no; if the vendor is spelled differently in that file, on invoice no alone, but only when that invoice no is used by one vendor in both files.
   - Payment date = bank value date (`reconcile.payment_date`, the one place to change it). Send date = `sending.send_on_date(payment_date)`.
   - Only `PAID_IN_FULL`, `TDS_ONLY` and `DEDUCTION` results are sendable.
-- **Sending** (A's `sending.run_due`, daily at `send_time` Asia/Kolkata, or `POST /api/scheduler/run-now`). For every `PENDING` queue row with `send_on_date` ≤ today:
+- **Sending** (A's `sending.run_due`, daily at `send_time` Asia/Kolkata, or `POST /api/scheduler/run-now`). For every `PENDING` queue row with `send_on_date` ≤ today (`DRAFT` rows are never sent: they wait for Send all):
   - claim it `PENDING → SENDING` in one conditional UPDATE (two runs can never take the same row);
   - skip it (`SKIPPED`) if the vendor email is invalid, any invoice isn't sendable, or any UTR already has a `SENT` history row;
   - render it with B's `render_email`, then send it, or in DRY_RUN only log it;
@@ -80,7 +77,7 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 |---|---|---|---|---|
 | GET | /api/health | A | none | HealthOut |
 | GET | /api/auth/me | A | none | MeOut |
-| POST | /api/batches | A | multipart files: consolidated, bank, gdn, tds, vendors (.xlsx/.xls, ≤ `MAX_UPLOAD_MB` each, default 20) | 201 BatchOut; 422 `detail: [{file, message}]` listing every problem, nothing stored |
+| POST | /api/batches | A | multipart files: consolidated, bank, gdn, tds, vendors (.xlsx/.xls, ≤ `MAX_UPLOAD_MB` each, default 20); optional form fields `<field>_password` (e.g. `bank_password`) for password-protected files, decrypted in memory, never stored | 201 BatchOut; 422 `detail: [{file, message}]` listing every problem, nothing stored (a protected file with no or a wrong password adds `password_required: true`); 409 if a batch with exactly the same parsed rows exists (message names it), nothing stored |
 | GET | /api/batches/{id}/summary | A | none | BatchSummary |
 | POST | /api/batches/{id}/reconcile | A | none | BatchSummary; re-runnable (results already queued for email are left alone); ends by calling `build_queue(session, batch_id=id)`; 404 if no batch |
 | GET | /api/batches/{id}/results | A | query: status? (ResultStatus), vendor? (part of name, any case), limit (1–500, default 100), offset | list[ResultOut] in consolidated-report order; total before paging in header `X-Total-Count`; 404 if no batch |
@@ -88,19 +85,23 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | GET | /api/batches/{id}/proforma.xlsx | B | none | xlsx |
 | GET | /api/batches/{id}/report.xlsx | B | none | xlsx |
 | GET | /api/email-queue | B | query: batch_id?, status? (QueueStatus) | list[QueueItemOut] |
+| POST | /api/email-queue/schedule | B | query: batch_id? | `{scheduled}`: Send all. Every `DRAFT` email (only the batch's, if batch_id) becomes `PENDING`, so the daily job sends it on its T+2 date; one already past its date goes on the next run (admin) |
 | GET | /api/email-queue/{id}/preview | B | none | EmailPreview |
 | GET | /api/email-history | B | query: date_from?, date_to? (YYYY-MM-DD, on `logged_at`), vendor? (part of name, any case), status? (HistoryStatus), q? (text search), limit (default 50), offset | list[HistoryOut]; total before paging in header `X-Total-Count`; counts per status as a JSON object in header `X-Status-Counts` |
 | GET | /api/email-history/{id} | B | none | HistoryOut |
 | GET | /api/email-history/export.xlsx | B | query: same as GET /api/email-history (date_from, date_to, vendor, status, q) | xlsx; with no filters, the history file as before; with filters, only the matching rows |
 | POST | /api/email-history/rebuild-xlsx | B | none | RowCountOut (admin) |
-| GET | /api/exceptions | B | none | list[ResultOut] |
+| GET | /api/exceptions | B | none | list[ResultOut]; a result is left out when a newer reconciled batch has the same vendor + invoice |
 | GET | /api/exceptions/export.xlsx | B | none | xlsx |
-| GET | /api/manual-review | B | none | list[ResultOut] |
+| GET | /api/manual-review | B | none | list[ResultOut]; same newer-batch rule as /api/exceptions |
 | PUT | /api/manual-review/{result_id}/reason | B | ReasonIn | ResultOut |
 | POST | /api/manual-review/gdn-upload | B | multipart file: file | GdnUploadOut |
 | PUT | /api/vendors/{id}/email | B | VendorEmailIn | VendorOut |
 | GET | /api/settings | B | none | SettingsModel |
-| PUT | /api/settings | B | SettingsModel | SettingsModel (admin) |
+| PUT | /api/settings | B | SettingsModel | SettingsModel (admin); saving send_time moves the daily job at once |
+| GET | /api/settings/smtp | B | none | SmtpSettingsOut `{host, port, user, password_set, from_email, from_name, starttls, locked}`; the password is never returned (admin) |
+| PUT | /api/settings/smtp | B | SmtpSettingsIn (same fields + `password`; empty keeps the saved one) | SmtpSettingsOut; 409 if a changed field is set in the environment (admin) |
+| POST | /api/settings/smtp/test | B | none | `{sent_to}`: one test email to the signed-in admin; 422 with the server's reason on failure (admin) |
 
 Model fields, in short (exact types are in `schemas.py`):
 
@@ -140,12 +141,14 @@ The signature column is checked by the contract test. Module prefixes are droppe
 
 What each one does:
 
-- `get_setting(name)`: env var `NAME` (upper-case) first, then the `app_settings` row, then the default. Only known names are allowed: `dry_run` (default `"true"`), `send_time` (default `"10:00"`) and `signature` (default `"[Name, designation]"`, the sign-off `render_email` puts under the table). KeyError for anything else, so secrets in the environment can't be read through it.
+- `get_setting(name)`: env var `NAME` (upper-case) first, then the `app_settings` row, then the default. Only known names are allowed: `dry_run` (default `"true"`), `send_time` (default `"10:00"`) and `signature` (default `"[Name, designation]"`, the sign-off `render_email` puts under the table). KeyError for anything else, so secrets in the environment can't be read through it. An env var set to an empty string counts as unset.
+- `smtp()`: the mail server settings in effect. Each of `smtp_host`, `smtp_port`, `smtp_user`, `smtp_password`, `smtp_from`, `smtp_from_name`, `smtp_starttls` is env var (upper-case) first, then the `app_settings` row (Settings page), then the default. `set_setting` accepts these keys too and never writes the password to `audit_log`.
+- **Timestamps** (`uploaded_at`, `sent_at`, `logged_at`, ...) are stored as IST wall-clock time without an offset (`config.now_ist()`). Rows written before this change are UTC.
 - `set_setting(name, value)`: upserts the `app_settings` row and appends to `audit_log` in one commit. An env var with the same name still wins on read.
 - `load_gdn_file(file)`: parses a GDN Report workbook (all month sheets) into `GdnRow`s (`contract.py`). It doesn't write to the DB. ValueError if the file isn't a GDN Report.
 - `requeue_after_reason(...)`: sets the reason on a MANUAL_REVIEW result, moves it to DEDUCTION, writes `audit_log`, then calls `build_queue(result_ids=[result_id])`. A send date already in the past goes out on the next run. ValueError if the result isn't MANUAL_REVIEW, has no deduction to explain (overpaid, or TDS larger than the shortfall), or the reason is empty or over 500 characters.
 - `requeue_vendor_exceptions(session, vendor_id)`: re-checks that vendor's INVALID_EMAIL results and every VENDOR_NOT_FOUND result with the full rule set; those that now match this vendor are updated, and the sendable ones are queued with `build_queue(result_ids=[...])`. Returns how many were queued. ValueError if the vendor doesn't exist. Call it after fixing a vendor's email or adding a vendor.
-- `send_on_date(payment_date)`: the T+2 rule, already real (not a stub). Counts 2 business days after the bank value date, where every day except Sunday is a business day; holidays are not skipped. Fri→Mon, Sat→Tue, Thu→Sat. Nobody computes a send date any other way.
+- `send_on_date(payment_date)`: the T+2 rule. Counts 2 business days after the bank value date, where every day except Sunday is a business day; holidays are not skipped. Fri→Mon, Sat→Tue, Thu→Sat. Nobody computes a send date any other way.
 - `build_queue(...)`: creates `email_queue` (one row per vendor + send date, from `send_on_date`) and `email_items` (one per UTR) for the sendable results of a batch, or for the given results. Skips UTRs already in `email_items`. Returns the new queue ids.
 - `render_email(session, queue_id)`: returns `(subject, html, text)`. Called while the row is `SENDING`; it must not commit or change the queue row. If it raises, that email is marked FAILED. Table columns in this order: Invoice No | Invoice Amount | UTR | Payment Date | Amount Paid | TDS Amount | Invoice Deduction | Reason. Empty cells stay empty.
 - `append_new_rows(session)`: appends `email_history` rows not yet in the Excel file at `config.HISTORY_XLSX_PATH`. `rebuild(session)` rewrites that file from the whole table. Both return a row count.
@@ -160,7 +163,7 @@ What each one does:
 | Upload field | Real file | Key columns |
 |---|---|---|
 | `consolidated` | Consolidated Pharmacy *.xlsx | `benefName` (vendor), `Narration 2- Invoice No`, `Narration 3- PO No`, `GRN NO:`, `Invoice Amount`, `Cheque Amount`, `Debit Note`, `Diff`, `Transaction Date`, `UTR NO:` |
-| `bank` | Bank statement *.xls (legacy xls), or the DLB statement (same layout, debit-only, password-protected) | `Value Date` (dd/mm/yyyy), `Ref / Cheque No` (UTR), `Debit` (Indian format `5,45,060.00`), `Description` |
+| `bank` | Bank statement *.xls (legacy xls), or the DLB statement (same layout, debit-only, password-protected: send `bank_password`) | `Value Date` (dd/mm/yyyy), `Ref / Cheque No` (UTR), `Debit` (Indian format `5,45,060.00`), `Description` |
 | `gdn` | Credit note Consolidated *.xlsx (one sheet per month plus `TOTAL`) | `Particulars` (vendor), `Voucher Ref. No.` (vendor invoice), `Narration` (reason), `Gross Total` |
 | `tds` | 194Q TDS *.xlsx | `PARTY NAME`, `Inv No`, `TDS` / `Total TDS` |
 | `vendors` | Vendor Contact list *.xlsx (sheet `Vendor` = distributors/stockists, sheet `CFA` = drug companies' carrying & forwarding agents; both are read) | `Vendor Name`, `Email ID`, `Email ID- Contact 2` (each may hold several addresses separated by `;`, `,` or `/`) |

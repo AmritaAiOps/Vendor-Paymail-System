@@ -2,12 +2,16 @@ import io
 import zipfile
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
+from msoffcrypto.format.ooxml import OOXMLFile
 
 from app.ingest import _parse, load_gdn_file
-from app.ingest.clean import clean_str, loose_name_key, name_key, normalize_utr, parse_amount, parse_date, split_emails
+from app.ingest.clean import (cfa_company_key, clean_str, loose_name_key, name_key, normalize_utr, parse_amount,
+                              parse_date, split_emails)
 from app.models import ConsolidatedEntry, Vendor
+from app.reconcile import _Vendors
 from tests.fixtures import three_row_example as fx
 from tests.util import files_from, xlsx
 
@@ -60,6 +64,30 @@ def test_name_key_matches_spelling_variants():
     assert loose_name_key("PHARMAGIX") == loose_name_key("Pharmagix(A Unit Of White Pharmaceuticals)")
     assert loose_name_key("AARK PHARMACEUTICALS PRIVATE LIMITED") == loose_name_key("Aark Pharmaceuticals")
     assert loose_name_key("M/S VALTURE PHARMACEUTICAL LLP") == loose_name_key("Valture Pharmaceutical")
+    assert name_key("INTEGRA LIFE SCIENCES PRIVATE LIMITED") == name_key("Integra Life Sciences P Ltd") \
+        == name_key("Integra Life Sciences (P) Ltd")
+    assert name_key("UP Ltd") != name_key("U Pvt Ltd")  # only a standalone P
+    assert cfa_company_key("Bansal Medical Hall (Macleods Cfa)") == loose_name_key("Macleods")
+    for paid, listed in [("VARENYAM HEALTHCARE PRIVATE LIMITED", "Varenyam Healthcare - Cfa"),
+                         ("WIN MEDICARE PRIVATE LIMITED", "Win Medicare Private Limited - Cfa Delhi"),
+                         ("N.R.I. HEALTH AIDS", "Nri Health Aid"), ("DR. REDDYS LABORATORIES", "Dr. Reddy'S Laboratories"),
+                         ("JB CHEMICAL & PHARMACEUTICALS LIMITED", "J.B Chemicals And Pharmaceuticals Ltd")]:
+        assert loose_name_key(paid) == loose_name_key(listed), paid
+    assert cfa_company_key("Anthus Pharmaceuticals (P) Ltd (Cfa)") is None and cfa_company_key("Roche (India)") is None
+
+
+def test_vendor_lookup_company_vs_cfa():
+    names = {"Aark Pharmaceuticals": "a@aark.in", "Aark Pharmaceuticals (Neon Cfa)": "neon@aark.in",
+             "Bansal Medical Hall (Macleods Cfa)": "b@bansal.in", "Mankind Pharma Ltd. (Cfa -Delhi)": "r@mankind.com",
+             "Mankind Pharma Ltd. (Cfa)": "R@mankind.com", "Zen Labs (North)": "n@zen.in", "Zen Labs (South)": "s@zen.in"}
+    vendors = _Vendors([SimpleNamespace(party_name=n, email=e) for n, e in names.items()])
+    find = lambda n: getattr(vendors.find(n), "party_name", None)
+    assert find("AARK PHARMACEUTICALS PRIVATE LIMITED") == "Aark Pharmaceuticals"  # not its CFA
+    assert find("Macleods Pharmaceuticals Ltd") == "Bansal Medical Hall (Macleods Cfa)"  # through the CFA
+    assert find("Bansal Medical Hall") == "Bansal Medical Hall (Macleods Cfa)"
+    assert find("MANKIND PHARMA LIMITED DL") == "Mankind Pharma Ltd. (Cfa -Delhi)"  # both rows: same email
+    assert find("ZEN LABS PVT LTD") is None  # two entries, two emails, neither is just the name: never guess
+    assert find("Unknown Traders") is None
 
 
 def test_vendors_contact_2_is_mailed_and_variants_dedupe():
@@ -137,13 +165,32 @@ def test_upload_rejects_bad_files_with_reasons(client, db):
     assert r.status_code == 422
     problems = {p["file"]: p["message"] for p in r.json()["detail"]}
     assert "not an Excel file" in problems["tds"]
-    assert "password-protected" in problems["gdn"]
+    assert "not a valid .xlsx" in problems["gdn"]  # OLE2 signature, but not an encrypted workbook
     assert set(problems) == {"tds", "gdn"}  # file checks run first; parsing waits until every file passes
     r = client.post("/api/batches", files=upload_files(bank=("bank.xlsx", xlsx(bad_bank))))
     assert r.json()["detail"] == [{"file": "bank", "message": 'missing column(s) "Debit"'}]
     r = client.post("/api/batches", files=upload_files(vendors=("vendors.xlsx", b"PK\x03\x04 not really")))
     assert "can't be read" in r.json()["detail"][0]["message"]
     assert db.query(ConsolidatedEntry).count() == 0  # nothing stored on failure
+
+
+def test_upload_password_protected_files(client, db):
+    locked = {}
+    for kind in ("bank", "tds"):  # any file may be protected, each with its own password
+        out = io.BytesIO()
+        OOXMLFile(io.BytesIO(files_from(fx)[kind][1])).encrypt(f"{kind}-pw", out)
+        locked[kind] = (f"{kind}.xlsx", out.getvalue())
+    post = lambda **pw: client.post("/api/batches", files=upload_files(**locked), data=pw)
+
+    r = post(tds_password="tds-pw")
+    assert r.status_code == 422 and r.json()["detail"] == [
+        {"file": "bank", "message": "bank.xlsx is password-protected; enter its password", "password_required": True}]
+    r = post(bank_password="nope", tds_password="tds-pw")
+    assert "password is wrong" in r.json()["detail"][0]["message"] and r.json()["detail"][0]["password_required"]
+    assert db.query(ConsolidatedEntry).count() == 0
+    r = post(bank_password="bank-pw", tds_password="tds-pw")
+    assert r.status_code == 201, r.text
+    assert client.get(f"/api/batches/{r.json()['id']}/summary").json()["files"]["bank"]["rows_kept"] == 3
 
 
 def test_upload_limits(client, db, monkeypatch):

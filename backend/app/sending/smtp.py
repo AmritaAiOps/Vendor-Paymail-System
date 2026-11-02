@@ -17,19 +17,20 @@ class SendError(Exception):
 
 def deliver(to: list[str], subject: str, html: str, text: str) -> dict:
     """Send one email (plain text + HTML). Returns the addresses the server refused, if it accepted the others."""
+    s = config.smtp()
     msg = EmailMessage()
-    msg["From"] = formataddr((config.SMTP_FROM_NAME, config.SMTP_FROM))
+    msg["From"] = formataddr((s["from_name"], s["from"]))
     msg["To"] = ", ".join(to)
     msg["Subject"] = subject
     msg["Message-ID"] = make_msgid()
     msg.set_content(text)
     msg.add_alternative(html, subtype="html")
     try:
-        smtp = smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=30)  # shortcut: no implicit-TLS port 465; add SMTP_SSL if a provider needs it
-        if config.SMTP_STARTTLS:
+        smtp = smtplib.SMTP(s["host"], s["port"], timeout=30)  # shortcut: no implicit-TLS port 465; add SMTP_SSL if a provider needs it
+        if s["starttls"]:
             smtp.starttls()
-        if config.SMTP_USER:
-            smtp.login(config.SMTP_USER, config.SMTP_PASSWORD)
+        if s["user"]:
+            smtp.login(s["user"], s["password"])
     except (OSError, smtplib.SMTPException) as e:
         raise SendError(f"could not connect to the mail server: {e}", retry_safe=True) from None
     try:

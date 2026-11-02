@@ -59,7 +59,7 @@ CONSOLIDATED_SOURCE = [
     _cons("INV-S21", "ORBIT HEALTHCARE", "30000", "27000", utr(21)),    # two debit notes on one invoice
     _cons("INV-S22", "KIRAN MEDICOS", "12000", "11000", utr(22)),       # debit note amount matches, narration blank
     _cons("INV-S23", "ZENITH REMEDIES PRIVATE LIMITED", "9000", "9000", utr(23)),  # list adds "(A Unit Of ...)"
-    _cons("INV-S24", "NOVA LABS PVT LTD", "9000", "9000", utr(24)),     # matches both Nova Labs entries: ambiguous
+    _cons("INV-S24", "NOVA LABS PVT LTD", "9000", "9000", utr(24)),     # the company, not "Nova Labs (Cfa)"
 ]
 
 BANK_SOURCE = [
@@ -143,5 +143,5 @@ EXPECTED = {
     ("INV-S21", utr(21)): _x("DEDUCTION", deduction=D("3000.00"), reason="Breakage (DN-0701); Short expiry (DN-0702)"),
     ("INV-S22", utr(22)): _x("MANUAL_REVIEW", "REASON_MISSING", deduction=D("1000.00")),
     ("INV-S23", utr(23)): _x("PAID_IN_FULL"),
-    ("INV-S24", utr(24)): _x("EXCEPTION", "VENDOR_NOT_FOUND"),  # never guess between a company and its CFA
+    ("INV-S24", utr(24)): _x("PAID_IN_FULL"),  # "Nova Labs", not its CFA: they differ by more than "Pvt Ltd"
 }

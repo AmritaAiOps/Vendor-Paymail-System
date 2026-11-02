@@ -9,6 +9,16 @@ Layout: `backend/` (FastAPI, Person A + B), `frontend/` (React + Vite, Person B)
 
 > **Login is Firebase Authentication.** Set up the Firebase project first (console steps at the top of [docs/FIREBASE_AUTH_PROMPTS.md](docs/FIREBASE_AUTH_PROMPTS.md)): turn on Email/Password, add the users by hand (there is no sign-up screen), copy the web app config into the `VITE_FIREBASE_*` variables. Viewers are verified emails at `ALLOWED_EMAIL_DOMAIN`; admins (Run now, Rebuild history file, saving Settings) are listed in `ADMIN_EMAILS`. Without `FIREBASE_PROJECT_ID` every API route except health answers 503.
 
+## Dev: backend + frontend in one command
+
+After the one-time setup below (backend venv, `npm install` in `frontend/`, `.env` at the repo root):
+
+```
+node dev.mjs
+```
+
+Backend on http://localhost:8000 (reloads on change, env from `.env`), frontend on http://localhost:5173. Ctrl+C stops both.
+
 ## Backend (dev, SQLite)
 
 ```
@@ -61,7 +71,7 @@ Secrets come only from the environment (`.env`, never committed). The settings p
 |---|---|---|
 | `POSTGRES_PASSWORD` | none (required in prod) | Letters and digits only: it goes into the database URL unescaped |
 | `DATABASE_URL` | `sqlite:///./dev.db` | Set by `docker-compose.prod.yml`; leave it alone there |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | empty, `587` | The company mail server |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | empty, `587` | The company mail server. Optional: admins can set all SMTP values on the Settings page instead. A non-empty env var wins and locks that field on the page |
 | `SMTP_FROM`, `SMTP_FROM_NAME` | empty, company name | Sender address and display name |
 | `SMTP_STARTTLS` | `true` | |
 | `DRY_RUN` | `true` | Emails are rendered and logged but **not sent** unless this is `false` (or unset and the setting is off) |
@@ -93,7 +103,7 @@ All commands from the repo root; `dc` means `docker compose -f docker-compose.pr
 
 **A queue row stuck in `SENDING`.** The app died mid-send; the email may or may not have gone out. It is never resent automatically. Check the mailbox's Sent folder, then fix the row by hand in the database (`SENT` with `sent_at`, or back to `PENDING` to resend).
 
-**Emails not going out.** In order: `DRY_RUN` still on? SMTP variables set? `dc logs app | grep email_queue` for `FAILED` / `skipped` lines. Exceptions and Manual Review pages list invoices that will never be emailed until fixed.
+**Emails not going out.** In order: `DRY_RUN` still on? Email server set (Settings page or SMTP variables)? `dc logs app | grep email_queue` for `FAILED` / `skipped` lines. Exceptions and Manual Review pages list invoices that will never be emailed until fixed.
 
 **Upload refused.** 413 = a request over the Nginx cap; 429 = more than 10 uploads a minute from one address, wait a minute; 422 = the reply lists each file's problem (wrong type, too big, password-protected, missing columns).
 
@@ -124,7 +134,7 @@ dc exec -u root app chown app:app /app/data/email_history.xlsx   # docker cp lea
 
 ## Contributing
 
-Two people build in parallel. Person A owns the engine and Person B owns delivery; [docs/CONTRACT.md](docs/CONTRACT.md) says who owns what, and [.github/CODEOWNERS](.github/CODEOWNERS) mirrors it.
+Two people build in parallel. Person A owns the engine and Person B owns delivery; [docs/CONTRACT.md](docs/CONTRACT.md) says who owns what.
 
 - Both people branch from the tag `foundation-v1`. Person A works on `backend`; Person B works on their own branch.
 - Commit at the end of every phase, on your own branch.

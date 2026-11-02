@@ -51,7 +51,9 @@ class Base(DeclarativeBase):
 class UploadBatch(Base):
     __tablename__ = "upload_batches"
     id: Mapped[int] = mapped_column(primary_key=True)
-    uploaded_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # sha256 of the five files' parsed rows (ingest.rows_sha256): the same data uploaded again is refused
+    files_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    uploaded_at: Mapped[datetime] = mapped_column(default=config.now_ist, server_default=func.now())
     consolidated_file: Mapped[str] = mapped_column(String(255))
     bank_file: Mapped[str] = mapped_column(String(255))
     gdn_file: Mapped[str] = mapped_column(String(255))
@@ -161,7 +163,7 @@ class SendLog(Base):
     __tablename__ = "send_logs"
     id: Mapped[int] = mapped_column(primary_key=True)
     email_queue_id: Mapped[int] = mapped_column(ForeignKey("email_queue.id"), index=True)
-    timestamp: Mapped[datetime] = mapped_column(server_default=func.now())
+    timestamp: Mapped[datetime] = mapped_column(default=config.now_ist, server_default=func.now())
     status: Mapped[HistoryStatus] = mapped_column(Choice(HistoryStatus))
     error_message: Mapped[str | None] = mapped_column(Text)
 
@@ -170,7 +172,7 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(primary_key=True)
     what: Mapped[str] = mapped_column(Text)
-    logged_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    logged_at: Mapped[datetime] = mapped_column(default=config.now_ist, server_default=func.now())
     old_value: Mapped[str | None] = mapped_column(Text)
     new_value: Mapped[str | None] = mapped_column(Text)
 
@@ -179,7 +181,7 @@ class EmailHistory(Base):
     """Append-only: a DB trigger (see the migration) rejects UPDATE and DELETE."""
     __tablename__ = "email_history"
     id: Mapped[int] = mapped_column(primary_key=True)
-    logged_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    logged_at: Mapped[datetime] = mapped_column(default=config.now_ist, server_default=func.now())
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("upload_batches.id"))
     vendor_name: Mapped[str] = mapped_column(String(255), index=True)
     to_email: Mapped[str | None] = mapped_column(Text)
@@ -204,4 +206,4 @@ class AppSetting(Base):
     __tablename__ = "app_settings"
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(default=config.now_ist, server_default=func.now(), onupdate=config.now_ist)

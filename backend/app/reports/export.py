@@ -22,12 +22,17 @@ def workbook(title: str, headers: list[str], widths: list[int] | None = None) ->
     return wb
 
 
+def safe(cell) -> None:
+    """Text stays text, so a value starting with "=" can't become a formula."""
+    if isinstance(cell.value, str):
+        cell.data_type = "s"
+
+
 def append(ws, cells: list) -> None:
-    """None stays an empty cell. Text is forced to text so a value starting with "=" can't become a formula."""
+    """None stays an empty cell; text is made safe."""
     ws.append(cells)
     for c in ws[ws.max_row]:
-        if isinstance(c.value, str):
-            c.data_type = "s"
+        safe(c)
 
 
 def response(wb: Workbook, filename: str) -> Response:

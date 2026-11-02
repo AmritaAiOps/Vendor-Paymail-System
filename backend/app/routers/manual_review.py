@@ -10,7 +10,7 @@ from app import config, ingest, reconcile
 from app.contract import ResultStatus
 from app.history.audit import log_change
 from app.models import ConsolidatedEntry, ReconciliationResult, get_db
-from app.reports.results import results_out
+from app.reports.results import latest_only, results_out
 from app.schemas import GdnUploadOut, ReasonIn, ResultOut
 
 router = APIRouter(prefix="/manual-review", tags=["manual-review"])
@@ -19,7 +19,7 @@ _waiting = ReconciliationResult.status == ResultStatus.MANUAL_REVIEW
 
 @router.get("", response_model=list[ResultOut])
 def manual_review(db: Session = Depends(get_db)):
-    return results_out(db, _waiting)
+    return results_out(db, _waiting, latest_only())
 
 
 @router.put("/{result_id}/reason", response_model=ResultOut)
@@ -64,7 +64,7 @@ def gdn_upload(file: UploadFile, request: Request, db: Session = Depends(get_db)
     waiting = defaultdict(list)  # invoice no -> [(result id, vendor name)]
     for rid, vendor, invoice in db.execute(
             select(ReconciliationResult.id, ConsolidatedEntry.vendor_name, ConsolidatedEntry.invoice_no)
-            .join(ConsolidatedEntry, ConsolidatedEntry.id == ReconciliationResult.consolidated_entry_id).where(_waiting)):
+            .join(ConsolidatedEntry, ConsolidatedEntry.id == ReconciliationResult.consolidated_entry_id).where(_waiting, latest_only())):
         waiting[invoice.strip().casefold()].append((rid, vendor))
     reasons = defaultdict(list)  # result id -> narrations
     for g in rows:

@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, downloadUrl, type HistoryFilters, type HistoryOut, type HistoryStatus } from "../api/client";
 import { EmailFrame } from "../components/EmailFrame";
-import { DownloadLink, Empty, ErrorBox, HISTORY_BADGE, Loading, Modal, Pager, StatusBadge, StubTag, btn, btnPrimary, input, num, td, th } from "../components/ui";
+import { btn, btnPrimary, card, DownloadLink, Empty, ErrorBox, HISTORY_BADGE, input, Loading, Modal, num, Pager, pageTitle, StatusBadge, td, th } from "../components/ui";
 import { formatDate, formatDateTime, formatMoney } from "../lib/format";
 
 const PAGE = 25;
@@ -37,16 +37,16 @@ function Detail({ row, onClose }: { row: HistoryOut; onClose: () => void }) {
     <Modal title={`${h.vendor_name} · ${h.invoice_no ?? "no invoice"}`} onClose={onClose}>
       <p className="mb-3"><StatusBadge map={HISTORY_BADGE} value={h.status} /></p>
       <dl className="mb-4 grid grid-cols-[8rem_1fr] gap-y-1 text-sm">
-        {facts.filter(([, v]) => v).map(([k, v]) => <div key={k} className="contents"><dt className="text-slate-600">{k}</dt><dd>{v}</dd></div>)}
+        {facts.filter(([, v]) => v).map(([k, v]) => <div key={k} className="contents"><dt className="text-slate-500">{k}</dt><dd>{v}</dd></div>)}
       </dl>
       {h.status === "NOT_SENT" && (
-        <div role="note" className={`rounded border p-3 ${bounced(h) ? "border-amber-400 bg-amber-50" : "border-slate-300 bg-slate-50"}`}>
+        <div role="note" className={`rounded-xl border p-3 ${bounced(h) ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-slate-50"}`}>
           <h3 className="font-medium">Why no email was sent</h3>
           <p className="mt-1">{WHY[h.not_sent_reason ?? ""] ?? h.not_sent_reason ?? "No reason was recorded."}</p>
-          {itemLink(h) && <p className="mt-2"><Link className="underline" to={itemLink(h)!}>Open the {IN_REVIEW.has(h.not_sent_reason ?? "") ? "manual review" : "exception"} item</Link></p>}
+          {itemLink(h) && <p className="mt-2"><Link className="font-medium text-indigo-600 underline-offset-2 hover:underline" to={itemLink(h)!}>Open the {IN_REVIEW.has(h.not_sent_reason ?? "") ? "manual review" : "exception"} item</Link></p>}
         </div>
       )}
-      {h.status === "FAILED" && h.error_message && <p role="alert" className="mb-3 rounded border border-red-300 bg-red-50 p-3 text-red-900">Send error: {h.error_message}</p>}
+      {h.status === "FAILED" && h.error_message && <p role="alert" className="mb-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-rose-800">Send error: {h.error_message}</p>}
       {h.status === "DRY_RUN" && <p className="mb-3 text-sm text-slate-700">Dry run: this is the email that would be sent. Nothing left the server.</p>}
       {hasEmail && (<>
         <h3 className="mb-2 font-medium">{h.status === "SENT" ? "Email as sent" : "Email"}</h3>
@@ -71,15 +71,15 @@ export default function EmailHistory() {
   return (
     <section>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Email History<StubTag path="/email-history" /></h1>
+        <h1 className={pageTitle}>Email History</h1>
         <div className="flex flex-wrap gap-2">
           {Object.values(filters).some(Boolean) && <DownloadLink href={downloadUrl.historyExport(filters)}>Export filtered view</DownloadLink>}
           <DownloadLink href={downloadUrl.historyExport()}>Download history (Excel)</DownloadLink>
         </div>
       </div>
-      <p className="mt-1 text-slate-600">Every email the app sent or did not send, newest first.</p>
+      <p className="mt-1 text-slate-500">Every email the app sent or did not send, newest first.</p>
 
-      <form className="mt-4 flex flex-wrap items-end gap-3" aria-label="Filter history" key={JSON.stringify(filters) === "{}" ? "clear" : "set"}
+      <form className={`${card} mt-4 flex flex-wrap items-end gap-3 p-4 text-slate-500`} aria-label="Filter history" key={JSON.stringify(filters) === "{}" ? "clear" : "set"}
         onSubmit={(e) => {
           e.preventDefault();
           const d = new FormData(e.currentTarget);
@@ -95,10 +95,10 @@ export default function EmailHistory() {
       </form>
 
       <div role="group" aria-label="Filter by status" className="mt-4 flex flex-wrap gap-2 text-sm">
-        <button className={`${btn} ${!filters.status ? "border-blue-700 font-semibold" : ""}`} aria-pressed={!filters.status} onClick={() => apply({ ...filters, status: undefined })}>
+        <button className={`${btn} ${!filters.status ? "!border-indigo-300 !bg-indigo-50 !text-indigo-700" : ""}`} aria-pressed={!filters.status} onClick={() => apply({ ...filters, status: undefined })}>
           All <span className="tabular-nums">({all.toLocaleString("en-IN")})</span></button>
         {(Object.keys(HISTORY_BADGE) as HistoryStatus[]).map((s) => (
-          <button key={s} className={`${btn} ${filters.status === s ? "border-blue-700 font-semibold" : ""}`} aria-pressed={filters.status === s} onClick={() => apply({ ...filters, status: s })}>
+          <button key={s} className={`${btn} ${filters.status === s ? "!border-indigo-300 !bg-indigo-50 !text-indigo-700" : ""}`} aria-pressed={filters.status === s} onClick={() => apply({ ...filters, status: s })}>
             {HISTORY_BADGE[s][0]} <span className="tabular-nums">({(counts[s] ?? 0).toLocaleString("en-IN")})</span></button>
         ))}
       </div>
@@ -107,7 +107,7 @@ export default function EmailHistory() {
       {q.isError && <div className="mt-4"><ErrorBox error={q.error} /></div>}
       {q.data && (q.data.rows.length === 0 ? <div className="mt-4"><Empty>{all === 0 && !filters.status ? "No emails have been sent or blocked yet." : "No history matches these filters."}</Empty></div> : (
         <>
-          <div className="mt-3 overflow-x-auto">
+          <div className={`${card} mt-3 animate-fade-up overflow-x-auto`}>
             <table className="w-full border-collapse text-sm">
               <caption className="sr-only">Email history, {q.data.total} rows</caption>
               <thead><tr>

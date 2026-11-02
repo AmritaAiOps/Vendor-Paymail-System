@@ -3,14 +3,14 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, errorMessage, type ResultOut } from "../api/client";
 import { ResultsTable, matchesQuery } from "../components/ResultsTable";
-import { Empty, ErrorBox, Loading, StubTag, btn, btnPrimary, input } from "../components/ui";
+import { btn, btnPrimary, card, Empty, ErrorBox, input, Loading, pageTitle } from "../components/ui";
 
 const MAX_REASON = 500;
 const WHY: Record<string, string> = { REASON_MISSING: "Reason missing", AMOUNT_MISMATCH: "Amount mismatch" };
 
 function useRefreshAfterChange() {
   const qc = useQueryClient();
-  return () => ["manual-review", "queue", "exceptions", "history"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
+  return () => ["manual-review", "queue", "exceptions", "history", "summary", "results"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
 }
 
 function ReasonForm({ row }: { row: ResultOut }) {
@@ -26,7 +26,7 @@ function ReasonForm({ row }: { row: ResultOut }) {
           onChange={(e) => setText(e.target.value)} aria-describedby={`${id}-msg`} />
         <button className={btnPrimary} disabled={!text.trim() || save.isPending}>{save.isPending ? "Saving…" : "Save"}</button>
       </div>
-      <p id={`${id}-msg`} role={save.isError ? "alert" : undefined} className="text-xs text-red-800">{save.isError ? errorMessage(save.error) : ""}</p>
+      <p id={`${id}-msg`} role={save.isError ? "alert" : undefined} className="text-xs text-rose-700">{save.isError ? errorMessage(save.error) : ""}</p>
     </form>
   );
 }
@@ -36,9 +36,9 @@ function GdnUpload() {
   const refresh = useRefreshAfterChange();
   const up = useMutation({ mutationFn: () => api.gdnUpload(file!), onSuccess: refresh });
   return (
-    <form className="mt-4 rounded-lg border border-slate-200 bg-white p-3" onSubmit={(e) => { e.preventDefault(); if (file) up.mutate(); }}>
+    <form className={`${card} mt-4 p-4`} onSubmit={(e) => { e.preventDefault(); if (file) up.mutate(); }}>
       <h2 className="font-medium">Upload an updated GDN report</h2>
-      <p className="mb-2 text-sm text-slate-600">Matching items get the report's narration as their reason and move to the email queue.</p>
+      <p className="mb-2 text-sm text-slate-500">Matching items get the report's narration as their reason and move to the email queue.</p>
       <div className="flex flex-wrap items-center gap-3">
         <label htmlFor="gdn-file" className="text-sm">GDN file (.xlsx, .xls)</label>
         <input id="gdn-file" type="file" accept=".xlsx,.xls" className="text-sm" onChange={(e) => { setFile(e.target.files?.[0]); up.reset(); }} />
@@ -47,7 +47,7 @@ function GdnUpload() {
       <p role="status" className="mt-2 text-sm">
         {up.data && `Read ${up.data.rows_read.toLocaleString("en-IN")} GDN rows. ${up.data.requeued} item${up.data.requeued === 1 ? "" : "s"} moved to the email queue.`}
       </p>
-      {up.isError && <p role="alert" className="mt-2 text-sm text-red-800">{errorMessage(up.error)}</p>}
+      {up.isError && <p role="alert" className="mt-2 text-sm text-rose-700">{errorMessage(up.error)}</p>}
     </form>
   );
 }
@@ -60,8 +60,8 @@ export default function ManualReview() {
 
   return (
     <section>
-      <h1 className="text-xl font-semibold">Manual review<StubTag path="/manual-review" /></h1>
-      <p className="mt-1 text-slate-600">Deductions with no reason. Type a reason, or upload an updated GDN report. Saved items go straight to the email queue.</p>
+      <h1 className={pageTitle}>Manual review</h1>
+      <p className="mt-1 text-slate-500">Deductions with no reason. Type a reason, or upload an updated GDN report. Saved items go straight to the email queue.</p>
       <GdnUpload />
       {find && <p className="mt-3 text-sm">Showing items matching <strong>{find}</strong>. <button className={btn} onClick={() => setParams({})}>Show all</button></p>}
 
@@ -71,7 +71,7 @@ export default function ManualReview() {
         ? <div className="mt-4"><Empty>{find ? "No item in review matches. It may already be resolved." : "Nothing waiting for review."}</Empty></div>
         : <div className="mt-4"><ResultsTable rows={rows} caption={`Manual review: ${rows.length} items`} extraHeader="Why / reason"
           extra={(r) => (<>
-            <p className="mb-1 text-xs font-semibold uppercase text-amber-900">{WHY[r.exception_type ?? ""] ?? r.exception_type}</p>
+            <p className="mb-1 text-xs font-semibold uppercase text-amber-700">{WHY[r.exception_type ?? ""] ?? r.exception_type}</p>
             <ReasonForm row={r} />
           </>)} /></div>)}
     </section>

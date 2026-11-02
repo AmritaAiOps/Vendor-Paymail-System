@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { formatDate, formatDateTime, formatMoney } from "./format";
 
-test("datetime keeps the clock time", () => {
+test("datetime keeps the (IST) clock time", () => {
   expect(formatDateTime("2025-09-15T10:05:33")).toBe("15-Sep-25 10:05");
   expect(formatDateTime("2025-09-15")).toBe("15-Sep-25");
   expect(formatDateTime(null)).toBe("");

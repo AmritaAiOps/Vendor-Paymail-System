@@ -32,11 +32,6 @@ export function errorMessage(err: unknown): string {
   return err.message;
 }
 
-// Paths whose last response carried X-Stub: true (canned data from Person A's stubs). Dev screens show a tag.
-const stubPaths = new Set<string>();
-const noteStub = (path: string, header: string | null) => { header === "true" ? stubPaths.add(path) : stubPaths.delete(path); };
-export const isStub = (path: string) => stubPaths.has(path);
-
 type Query = Record<string, string | number | undefined>;
 
 async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<{ data: T; res: Response }> {
@@ -57,7 +52,6 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
     const data = await res.json().catch(() => null);
     throw failed(res.status, data?.detail ?? res.statusText);
   }
-  noteStub(path, res.headers.get("X-Stub"));
   return { data: res.status === 204 ? (undefined as T) : await res.json(), res };
 }
 
@@ -76,7 +70,7 @@ async function upload<T>(path: string, form: FormData, onProgress: (pct: number)
     xhr.onload = () => {
       let data: any = null;
       try { data = JSON.parse(xhr.responseText); } catch { /* non-JSON error body */ }
-      if (xhr.status >= 200 && xhr.status < 300) { noteStub(path, xhr.getResponseHeader("X-Stub")); resolve(data as T); }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data as T);
       else reject(failed(xhr.status, data?.detail ?? xhr.statusText));
     };
     xhr.send(form);
@@ -85,12 +79,12 @@ async function upload<T>(path: string, form: FormData, onProgress: (pct: number)
 
 // --- types (short forms from CONTRACT.md; exact types live in backend/app/schemas.py) ---
 export type ResultStatus = "PAID_IN_FULL" | "TDS_ONLY" | "DEDUCTION" | "EXCEPTION" | "MANUAL_REVIEW";
-export type QueueStatus = "PENDING" | "SENDING" | "SENT" | "FAILED" | "SKIPPED";
+export type QueueStatus = "DRAFT" | "PENDING" | "SENDING" | "SENT" | "FAILED" | "SKIPPED";
 export type HistoryStatus = "SENT" | "FAILED" | "DRY_RUN" | "NOT_SENT";
 export type BatchStatus = "UPLOADED" | "RECONCILED" | "FAILED";
 export type ExceptionType = "UTR_NOT_FOUND" | "VENDOR_NOT_FOUND" | "INVALID_EMAIL" | "REASON_MISSING" | "BOUNCED" | "AMOUNT_MISMATCH";
 export type ResultOut = {
-  id: number; batch_id: number; vendor_name: string; invoice_no: string; utr: string | null;
+  id: number; batch_id: number; vendor_id: number | null; vendor_name: string; invoice_no: string; utr: string | null;
   invoice_value: string; payment_date: string | null; amount_paid: string | null;
   tds_amount: string | null; invoice_deduction: string | null; reason: string | null;
   status: ResultStatus; exception_type: ExceptionType | null; send_on_date: string | null;
@@ -112,6 +106,9 @@ export type HistoryFilters = { date_from?: string; date_to?: string; vendor?: st
 export type VendorOut = { id: number; party_name: string; email: string | null; is_email_valid: boolean };
 export type SettingsModel = { dry_run: boolean; send_time: string; signature: string };
 export type RunNowOut = { sent: number; failed: number; dry_run: number; not_sent: number };
+export type SmtpSettings = { host: string; port: number; user: string; password_set: boolean; from_email: string; from_name: string; starttls: boolean; locked: string[] };
+/** password: empty keeps the saved one. */
+export type SmtpSettingsIn = Omit<SmtpSettings, "password_set" | "locked"> & { password: string };
 export type MeOut = { email: string; is_admin: boolean };
 
 export const UPLOAD_FIELDS = ["consolidated", "bank", "gdn", "tds", "vendors"] as const;
@@ -120,20 +117,24 @@ export type UploadField = (typeof UPLOAD_FIELDS)[number];
 export const api = {
   health: () => get<{ status: string }>("/health"),
   me: () => get<MeOut>("/auth/me"),
-  uploadBatch: (files: Record<UploadField, File>, onProgress: (pct: number) => void) => {
+  /** passwords: only for password-protected files, sent as <field>_password. */
+  uploadBatch: (files: Record<UploadField, File>, passwords: Partial<Record<UploadField, string>>, onProgress: (pct: number) => void) => {
     const form = new FormData();
     UPLOAD_FIELDS.forEach((f) => form.append(f, files[f]));
+    UPLOAD_FIELDS.forEach((f) => passwords[f] && form.append(`${f}_password`, passwords[f]!));
     return upload<BatchOut>("/batches", form, onProgress);
   },
   batchSummary: (id: number) => get<BatchSummary>(`/batches/${id}/summary`),
   reconcile: (id: number) => send<BatchSummary>("POST", `/batches/${id}/reconcile`),
-  /** One page; total comes from X-Total-Count (null while the endpoint is a stub that doesn't send it). */
+  /** One page; total (before paging) comes from X-Total-Count. */
   batchResultsPage: async (id: number, limit: number, offset: number) => {
     const { data, res } = await request<ResultOut[]>("GET", `/batches/${id}/results`, undefined, { limit, offset });
     const total = res.headers.get("X-Total-Count");
-    return { rows: data, total: total === null ? null : Number(total) };
+    return { rows: data, total: Number(total) };
   },
   runNow: () => send<RunNowOut>("POST", "/scheduler/run-now"),
+  /** Send all: every draft becomes scheduled, sent by the daily job on its T+2 date. */
+  scheduleAll: () => send<{ scheduled: number }>("POST", "/email-queue/schedule"),
   emailQueue: (q?: { batch_id?: number; status?: QueueStatus }) => get<QueueItemOut[]>("/email-queue", q),
   emailPreview: (id: number) => get<EmailPreview>(`/email-queue/${id}/preview`),
   /** Newest first. counts = per status for the date/vendor/search filters (not the status filter). */
@@ -155,6 +156,9 @@ export const api = {
   setVendorEmail: (id: number, email: string) => send<VendorOut>("PUT", `/vendors/${id}/email`, { email }),
   settings: () => get<SettingsModel>("/settings"),
   saveSettings: (s: SettingsModel) => send<SettingsModel>("PUT", "/settings", s),
+  smtpSettings: () => get<SmtpSettings>("/settings/smtp"),
+  saveSmtpSettings: (s: SmtpSettingsIn) => send<SmtpSettings>("PUT", "/settings/smtp", s),
+  testSmtp: () => send<{ sent_to: string }>("POST", "/settings/smtp/test"),
 };
 
 /** Fetch an Excel file with the auth header and hand it to the browser (a plain link can't carry the token). */

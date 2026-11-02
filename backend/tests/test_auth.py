@@ -9,7 +9,7 @@ from app.models import get_db
 
 ADMIN, VIEWER = "boss@other.com", "clerk@pharma.test"
 ADMIN_ROUTES = [("POST", "/api/scheduler/run-now"), ("POST", "/api/email-history/rebuild-xlsx"),
-                ("PUT", "/api/settings")]
+                ("PUT", "/api/settings"), ("POST", "/api/email-queue/schedule")]
 
 
 @pytest.fixture

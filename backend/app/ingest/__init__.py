@@ -2,11 +2,14 @@
 
 Each file goes: bytes -> _read_rows (find the header row on every sheet, map columns) -> _parse_<kind>
 (clean each row; reject bad rows with a reason) -> rows ready to insert. Uploaded files are only read."""
+import hashlib
 import io
+import json
 import re
 from typing import BinaryIO
 
-import pandas as pd
+import openpyxl
+import xlrd
 from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
@@ -35,12 +38,42 @@ def _label(kind: str, field: str) -> str:
     return f'"{COLUMNS[kind][field][0]}"'
 
 
-def _find_header(df: pd.DataFrame, kind: str) -> tuple[int | None, dict | list]:
+# Read as an empty cell: pandas.read_excel's default NA strings (the vendor list writes "NA" for no contact 2)
+# plus Excel's error values.
+_EMPTY = {"", "#N/A", "#N/A N/A", "#NA", "-1.#IND", "-1.#QNAN", "-NaN", "-nan", "1.#IND", "1.#QNAN", "<NA>", "N/A",
+          "NA", "NULL", "NaN", "None", "n/a", "nan", "null", "#VALUE!", "#REF!", "#DIV/0!", "#NUM!", "#NAME?", "#NULL!"}
+
+
+def _text(v) -> str | None:
+    """One cell as text, None if empty. Whole numbers lose their ".0" and datetimes read "2026-08-01 00:00:00":
+    the same text pandas.read_excel(dtype=str) gave, which ingest was built and tested against."""
+    if v is None or (isinstance(v, str) and v in _EMPTY):
+        return None
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    return str(v)
+
+
+def _sheets(data: bytes) -> dict[str, list[list[str | None]]]:
+    """Every sheet as rows of cell text. Legacy .xls through xlrd, .xlsx through openpyxl (cached formula values)."""
+    if data.startswith(b"\xd0\xcf\x11\xe0"):  # OLE2: legacy .xls
+        book = xlrd.open_workbook(file_contents=data)
+        cell = lambda c: (xlrd.xldate_as_datetime(c.value, book.datemode) if c.ctype == xlrd.XL_CELL_DATE
+                          else None if c.ctype == xlrd.XL_CELL_ERROR else c.value)
+        return {s.name: [[_text(cell(c)) for c in s.row(i)] for i in range(s.nrows)] for s in book.sheets()}
+    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    try:
+        return {ws.title: [[_text(v) for v in row] for row in ws.iter_rows(values_only=True)] for ws in wb.worksheets}
+    finally:
+        wb.close()
+
+
+def _find_header(rows: list[list], kind: str) -> tuple[int | None, dict | list]:
     """(row index, {field: column index}) for the first of the top 10 rows holding every required header,
     else (None, the required fields missing from the closest row)."""
     best = REQUIRED[kind]
-    for i in range(min(10, len(df))):
-        headers = [_norm(h) for h in df.iloc[i]]
+    for i in range(min(10, len(rows))):
+        headers = [_norm(h) for h in rows[i]]
         cols = {}
         for field, aliases in COLUMNS[kind].items():
             hit = next((headers.index(_norm(a)) for a in aliases if _norm(a) in headers), None)
@@ -57,17 +90,18 @@ def _read_rows(data: bytes, kind: str) -> list[tuple[str, int, dict]]:
     """Data rows of every sheet that has the required headers, as (sheet, excel row, {field: raw value}).
     Sheets without them (e.g. a TOTAL sheet) are ignored. FileError if no sheet has them."""
     try:
-        sheets = pd.read_excel(io.BytesIO(data), sheet_name=None, header=None, dtype=str)
-    except Exception as e:  # pandas/xlrd/openpyxl raise many types for corrupt or protected files
+        sheets = _sheets(data)
+    except Exception as e:  # xlrd/openpyxl raise many types for corrupt or protected files
         raise FileError([{"file": kind, "message": f"can't be read as an Excel file ({type(e).__name__})"}]) from None
     rows, missing = [], REQUIRED[kind]
-    for sheet, df in sheets.items():
-        header, cols = _find_header(df, kind)
+    for sheet, cells in sheets.items():
+        header, cols = _find_header(cells, kind)
         if header is None:
             missing = min(missing, cols, key=len)
             continue
         missing = []
-        rows += [(sheet, i + 1, {f: df.iat[i, c] for f, c in cols.items()}) for i in range(header + 1, len(df))]
+        rows += [(sheet, i + 1, {f: cells[i][c] if c < len(cells[i]) else None for f, c in cols.items()})
+                 for i in range(header + 1, len(cells))]
     if missing:
         names = ", ".join(_label(kind, f) for f in missing)
         raise FileError([{"file": kind, "message": f"missing column(s) {names}"}])
@@ -238,9 +272,23 @@ def load_gdn_file(file: BinaryIO) -> list[GdnRow]:
     return [GdnRow(**r) for r in rows]
 
 
+class DuplicateUpload(Exception):
+    """Files with exactly the same rows were uploaded before, as batch_id."""
+
+    def __init__(self, batch_id: int):
+        super().__init__(batch_id)
+        self.batch_id = batch_id
+
+
+def rows_sha256(parsed: dict[str, list[dict]]) -> str:
+    """Fingerprint of the parsed rows, not the file bytes: re-saving the same workbook changes its bytes, not its rows."""
+    return hashlib.sha256(json.dumps([parsed[k] for k in FILE_KINDS], sort_keys=True, default=str).encode()).hexdigest()
+
+
 def ingest_batch(db: Session, files: dict[str, tuple[str, bytes]]) -> UploadBatch:
-    """files = {kind: (file name, bytes)} for all five kinds. Parses everything first; if any file is unusable,
-    raises FileError listing every problem and stores nothing. Otherwise stores the batch and its rows, commits."""
+    """files = {kind: (file name, bytes)} for all five kinds. Raises DuplicateUpload if the same five files were
+    uploaded before (same rows). Parses everything first; if any file is unusable, raises FileError listing every problem and
+    stores nothing. Otherwise stores the batch and its rows, commits."""
     parsed, reports, problems = {}, {}, []
     for kind in FILE_KINDS:
         name, data = files[kind]
@@ -250,8 +298,11 @@ def ingest_batch(db: Session, files: dict[str, tuple[str, bytes]]) -> UploadBatc
             problems += e.problems
     if problems:
         raise FileError(problems)
+    digest = rows_sha256(parsed)
+    if (earlier := db.scalar(select(UploadBatch.id).where(UploadBatch.files_sha256 == digest).limit(1))) is not None:
+        raise DuplicateUpload(earlier)
 
-    batch = UploadBatch(status=BatchStatus.UPLOADED, ingest_report=reports,
+    batch = UploadBatch(status=BatchStatus.UPLOADED, ingest_report=reports, files_sha256=digest,
                         **{f"{kind}_file": files[kind][0][:255] for kind in FILE_KINDS})
     db.add(batch)
     db.flush()

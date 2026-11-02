@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.auth import require_admin
 from app.contract import QueueStatus
 from app.email_builder import render_email
 from app.models import ConsolidatedEntry, EmailItem, EmailQueue, ReconciliationResult, Vendor, get_db
-from app.schemas import EmailPreview, QueueItemOut
+from app.schemas import EmailPreview, QueueItemOut, ScheduledOut
 
 router = APIRouter(prefix="/email-queue", tags=["email-queue"])
 
@@ -26,6 +27,22 @@ def queue(batch_id: int | None = None, status: QueueStatus | None = None, db: Se
                          send_on_date=eq.send_on_date, status=eq.status, sent_at=eq.sent_at,
                          subject=eq.subject, invoice_count=n)
             for eq, v, n in db.execute(q)]
+
+
+@router.post("/schedule", response_model=ScheduledOut, dependencies=[Depends(require_admin)])
+def schedule(batch_id: int | None = None, db: Session = Depends(get_db)):
+    """Send all: every DRAFT email (only those holding the batch's invoices, if batch_id) becomes PENDING, so the
+    daily job sends it on its T+2 date. An email whose date has passed goes on the next run."""
+    q = update(EmailQueue).where(EmailQueue.status == QueueStatus.DRAFT)
+    if batch_id is not None:
+        q = q.where(EmailQueue.id.in_(
+            select(EmailItem.email_queue_id)
+            .join(ReconciliationResult, ReconciliationResult.id == EmailItem.reconciliation_result_id)
+            .join(ConsolidatedEntry, ConsolidatedEntry.id == ReconciliationResult.consolidated_entry_id)
+            .where(ConsolidatedEntry.batch_id == batch_id)))
+    n = db.execute(q.values(status=QueueStatus.PENDING)).rowcount
+    db.commit()
+    return ScheduledOut(scheduled=n)
 
 
 @router.get("/{id}/preview", response_model=EmailPreview)
