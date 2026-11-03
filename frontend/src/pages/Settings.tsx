@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api, errorMessage, type SettingsModel, type SmtpSettings } from "../api/client";
+import { EmailFrame } from "../components/EmailFrame";
 import { btn, btnPrimary, card, ErrorBox, input, Loading, pageTitle } from "../components/ui";
 import { useMe } from "../lib/useAuth";
 
@@ -11,7 +12,7 @@ function SettingsForm({ saved, readOnly }: { saved: SettingsModel; readOnly: boo
   const [dryRun, setDryRun] = useState(saved.dry_run);
   const save = useMutation({
     mutationFn: api.saveSettings,
-    onSuccess: (s) => qc.setQueryData(["settings"], s),
+    onSuccess: (s) => { qc.setQueryData(["settings"], s); qc.invalidateQueries({ queryKey: ["settings", "email-sample"] }); },
   });
 
   function submit(e: FormEvent<HTMLFormElement>) {
@@ -166,6 +167,20 @@ function EmailServer() {
   return <SmtpForm saved={q.data} />;
 }
 
+/** The real template with made-up rows. SettingsForm refetches it on save, so a new signature shows. */
+function EmailSample() {
+  const q = useQuery({ queryKey: ["settings", "email-sample"], queryFn: api.emailSample });
+  return (
+    <section className={`${card} mt-8 max-w-3xl p-5`} aria-labelledby="sample-h">
+      <h2 id="sample-h" className="font-semibold">Email format</h2>
+      <p className="mt-1 mb-4 text-sm text-slate-500">What vendors receive. The rows here are made up; real emails list that vendor's paid invoices.</p>
+      {q.isPending && <Loading what="Loading sample email" />}
+      {q.isError && <ErrorBox error={q.error} />}
+      {q.data && <EmailFrame subject={q.data.subject} to="vendor@example.com" html={q.data.html} />}
+    </section>
+  );
+}
+
 export default function Settings() {
   const q = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const isAdmin = useMe().data?.is_admin ?? false;
@@ -175,7 +190,7 @@ export default function Settings() {
       <p className="mt-1 text-slate-500">A value set in the server environment wins; saving it here is refused.</p>
       {q.isPending && <Loading what="Loading settings" />}
       {q.isError && <div className="mt-4"><ErrorBox error={q.error} /></div>}
-      {q.data && <><SettingsForm saved={q.data} readOnly={!isAdmin} />{isAdmin && <><EmailServer /><Actions dryRun={q.data.dry_run} /></>}</>}
+      {q.data && <><SettingsForm saved={q.data} readOnly={!isAdmin} /><EmailSample />{isAdmin && <><EmailServer /><Actions dryRun={q.data.dry_run} /></>}</>}
     </section>
   );
 }

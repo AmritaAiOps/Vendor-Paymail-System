@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app import config
 from app.auth import require_admin
+from app.email_builder import sample_email
 from app.routers.scheduler import reschedule
-from app.schemas import MeOut, SettingsModel, SmtpSettingsIn, SmtpSettingsOut
+from app.schemas import EmailPreview, MeOut, SettingsModel, SmtpSettingsIn, SmtpSettingsOut
 from app.sending import dry_run
 from app.sending.smtp import SendError, deliver
 
@@ -26,6 +27,13 @@ def _as_stored(s: SettingsModel) -> dict[str, str]:
 @router.get("", response_model=SettingsModel)
 def get_settings():
     return _current()
+
+
+@router.get("/email-sample", response_model=EmailPreview)
+def email_sample():
+    """What a vendor email looks like: the real template with made-up rows and the current signature."""
+    subject, html, text = sample_email()
+    return EmailPreview(subject=subject, html=html, text=text)
 
 
 @router.put("", response_model=SettingsModel, dependencies=[Depends(require_admin)])

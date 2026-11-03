@@ -84,3 +84,9 @@ def test_smtp_test_email_goes_to_the_signed_in_admin(client, smtp, monkeypatch):
     assert [m["To"] for m in smtp.sent] == ["admin@example.com"]
     monkeypatch.delenv("SMTP_HOST")
     assert client.post("/api/settings/smtp/test").status_code == 422
+
+
+def test_email_sample_uses_the_saved_signature(client):
+    client.put("/api/settings", json={"dry_run": True, "send_time": "10:00", "signature": "Asha, Accounts"})
+    r = client.get("/api/settings/email-sample").json()
+    assert "Sample Vendor" in r["subject"] and "Asha, Accounts" in r["html"] and "INV-1003" in r["html"]

@@ -159,6 +159,7 @@ export const api = {
   smtpSettings: () => get<SmtpSettings>("/settings/smtp"),
   saveSmtpSettings: (s: SmtpSettingsIn) => send<SmtpSettings>("PUT", "/settings/smtp", s),
   testSmtp: () => send<{ sent_to: string }>("POST", "/settings/smtp/test"),
+  emailSample: () => get<EmailPreview>("/settings/email-sample"),
 };
 
 /** Fetch an Excel file with the auth header and hand it to the browser (a plain link can't carry the token). */

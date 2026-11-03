@@ -67,7 +67,24 @@ def render_email(session: Session, queue_id: int) -> tuple[str, str, str]:
         .join(EmailItem, EmailItem.reconciliation_result_id == ReconciliationResult.id)
         .join(ConsolidatedEntry, ConsolidatedEntry.id == ReconciliationResult.consolidated_entry_id)
         .where(EmailItem.email_queue_id == queue_id).order_by(EmailItem.id))
-    ctx = dict(vendor_name=vendor.party_name, header=HEADER, rows=[row(r, e) for r, e in pairs],
+    return _render(vendor.party_name, [row(r, e) for r, e in pairs])
+
+
+# Made-up rows for the Settings page sample: one per kind of payment (full, TDS only, deduction)
+SAMPLE_ROWS = [
+    ["INV-1001", "1,18,000.00", "UTIBR52026080112345", "05-Aug-26", "1,18,000.00", "", "", ""],
+    ["INV-1002", "50,000.00", "UTIBR52026081267890", "12-Aug-26", "49,000.00", "1,000.00", "", ""],
+    ["INV-1003", "25,000.00", "UTIBR52026082054321", "20-Aug-26", "23,500.00", "", "1,500.00", "Short supply"],
+]
+
+
+def sample_email() -> tuple[str, str, str]:
+    """(subject, html, text) of an example email with SAMPLE_ROWS and the current signature."""
+    return _render("Sample Vendor Pvt. Ltd.", SAMPLE_ROWS)
+
+
+def _render(vendor_name: str, rows: list[list[str]]) -> tuple[str, str, str]:
+    ctx = dict(vendor_name=vendor_name, header=HEADER, rows=rows,
                signature=config.get_setting("signature"), company=COMPANY)
-    return (f"Payment Details – {vendor.party_name} – {COMPANY}",
+    return (f"Payment Details – {vendor_name} – {COMPANY}",
             _env.get_template("email.html").render(ctx), _env.get_template("email.txt").render(ctx))
