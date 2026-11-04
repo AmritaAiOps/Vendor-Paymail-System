@@ -28,16 +28,19 @@ COLUMNS = {
         "invoice_no": ["Voucher Ref. No."],
         "amount": ["Gross Total"],
         "reason": ["Narration"],
+        "pan": ["GSTIN/UIN"],  # optional; stored as the PAN inside it
     },
     "tds": {
         "vendor_name": ["PARTY NAME"],
         "invoice_no": ["Inv No"],
         "invoice_date": ["Inv Date"],
+        "pan": ["PAN OF DEDUCTEE"],  # optional
         "tds_amount": ["TDS", "Total TDS"],  # the real file has two "TDS " columns; the first holds the amount
     },
     "vendors": {
         "party_name": ["Vendor Name", "Party Name"],
         "email": ["Email ID", "Email id"],
+        "pan": ["GSTIN/UIN"],  # optional; stored as the PAN inside it
         "email_2": ["Email ID- Contact 2"],  # optional: contact 2 is mailed too
     },
 }

@@ -80,6 +80,12 @@ def _name_words(name) -> list[str]:
     return [_NAME_WORDS.get(w, w) for w in re.findall(r"[a-z0-9]+", re.sub(r"\{[^}]*\}", " ", _name_text(name)))]
 
 
+def parse_pan(value) -> str | None:
+    """The PAN in a PAN or a GSTIN cell (a GSTIN is 2-digit state + PAN + 3 more characters); None if it isn't one."""
+    m = re.fullmatch(r"(?:\d{2})?([A-Z]{5}\d{4}[A-Z])(?:[0-9A-Z]Z[0-9A-Z])?", re.sub(r"\s+", "", str(value or "")).upper())
+    return m.group(1) if m else None
+
+
 def name_key(name) -> str:
     """Vendor-name match key: case, spaces and punctuation ignored, common suffixes unified, {codes} dropped.
     'R.K PHARMA' == 'R.K. Pharma'; 'A.C SURGIPHARMA PVT. LTD' == 'A.C Surgipharma Private Limited' == '... P Ltd'."""

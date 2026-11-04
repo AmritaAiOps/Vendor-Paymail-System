@@ -39,7 +39,7 @@ cd backend && .venv/Scripts/python -m pytest tests/contract -q
 |---|---|---|
 | `upload_batches`, `consolidated_entries`, `bank_transactions`, `gdn_records`, `tds_records`, `reconciliation_results`, `send_logs` | A | B |
 | `vendors` | A creates rows on upload. B writes only `email` and `is_email_valid` (the email fix) | A, B |
-| `email_queue`, `email_items` | B creates rows (`build_queue`), status `DRAFT` (B's `POST /api/email-queue/schedule` moves them to `PENDING`), `send_on_date` from `sending.send_on_date`. A updates only `email_queue.status`, `sent_at`, and on SENT the `subject` / `body_html` actually sent | A, B |
+| `email_queue`, `email_items` | B creates rows (`build_queue`), status `PENDING` (scheduled for T+2 by default; an old `DRAFT` is moved to `PENDING` by `POST /api/email-queue/schedule`), `send_on_date` from `sending.send_on_date`. A updates only `email_queue.status`, `sent_at`, and on SENT the `subject` / `body_html` actually sent | A, B |
 | `email_history` | A only, through `sending.record_history`. Append-only: DB triggers reject UPDATE and DELETE | B reads and exports |
 | `audit_log` | A and B, append only | A, B |
 | `app_settings` | Only through `config.get_setting` / `config.set_setting` | Same |
@@ -78,6 +78,8 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | GET | /api/health | A | none | HealthOut |
 | GET | /api/auth/me | A | none | MeOut |
 | POST | /api/batches | A | multipart files: consolidated, bank, gdn, tds, vendors (.xlsx/.xls, ≤ `MAX_UPLOAD_MB` each, default 20); optional form fields `<field>_password` (e.g. `bank_password`) for password-protected files, decrypted in memory, never stored | 201 BatchOut; 422 `detail: [{file, message}]` listing every problem, nothing stored (a protected file with no or a wrong password adds `password_required: true`); 409 if a batch with exactly the same parsed rows exists (message names it), nothing stored |
+| POST | /api/batches/detect | A | multipart `files` (up to 5) | {file name: kind or null}, kind = consolidated, bank, gdn, tds or vendors, by column headers; null = can't tell; nothing stored |
+| GET | /api/batches/sample/{kind}.xlsx | A | none | the expected layout of one upload file: the real headers and one made-up row; 404 for an unknown kind |
 | GET | /api/batches/{id}/summary | A | none | BatchSummary |
 | POST | /api/batches/{id}/reconcile | A | none | BatchSummary; re-runnable (results already queued for email are left alone); ends by calling `build_queue(session, batch_id=id)`; 404 if no batch |
 | GET | /api/batches/{id}/results | A | query: status? (ResultStatus), vendor? (part of name, any case), limit (1–500, default 100), offset | list[ResultOut] in consolidated-report order; total before paging in header `X-Total-Count`; 404 if no batch |
@@ -86,11 +88,14 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | GET | /api/batches/{id}/report.xlsx | B | none | xlsx |
 | GET | /api/email-queue | B | query: batch_id?, status? (QueueStatus) | list[QueueItemOut] |
 | POST | /api/email-queue/schedule | B | query: batch_id? | `{scheduled}`: Send all. Every `DRAFT` email (only the batch's, if batch_id) becomes `PENDING`, so the daily job sends it on its T+2 date; one already past its date goes on the next run (admin) |
+| POST | /api/email-queue/{id}/send-now | B | none | RunNowOut for that one email: sends it at once, ignoring its T+2 date (admin); 409 if already sent or being sent; 503 if SMTP isn't set up |
 | GET | /api/email-queue/{id}/preview | B | none | EmailPreview |
 | GET | /api/email-history | B | query: date_from?, date_to? (YYYY-MM-DD, on `logged_at`), vendor? (part of name, any case), status? (HistoryStatus), q? (text search), limit (default 50), offset | list[HistoryOut]; total before paging in header `X-Total-Count`; counts per status as a JSON object in header `X-Status-Counts` |
 | GET | /api/email-history/{id} | B | none | HistoryOut |
 | GET | /api/email-history/export.xlsx | B | query: same as GET /api/email-history (date_from, date_to, vendor, status, q) | xlsx; with no filters, the history file as before; with filters, only the matching rows |
 | POST | /api/email-history/rebuild-xlsx | B | none | RowCountOut (admin) |
+| GET | /api/results | B | query: status?, vendor? (part of name), q? (part of invoice no. or UTR), date_from?, date_to? (payment date, inclusive), limit (1–500, default 100), offset | list[ResultOut] from every batch; same newer-batch rule as /api/exceptions; total before paging in header `X-Total-Count` |
+| GET | /api/results/export.xlsx | B | same filters, no paging | xlsx |
 | GET | /api/exceptions | B | none | list[ResultOut]; a result is left out when a newer reconciled batch has the same vendor + invoice |
 | GET | /api/exceptions/export.xlsx | B | none | xlsx |
 | GET | /api/manual-review | B | none | list[ResultOut]; same newer-batch rule as /api/exceptions |
@@ -99,6 +104,7 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | PUT | /api/vendors/{id}/email | B | VendorEmailIn | VendorOut |
 | GET | /api/settings | B | none | SettingsModel |
 | PUT | /api/settings | B | SettingsModel | SettingsModel (admin); saving send_time moves the daily job at once |
+| GET | /api/settings/email-sample | B | none | EmailPreview: the real email template with made-up rows and the current signature |
 | GET | /api/settings/smtp | B | none | SmtpSettingsOut `{host, port, user, password_set, from_email, from_name, starttls, locked}`; the password is never returned (admin) |
 | PUT | /api/settings/smtp | B | SmtpSettingsIn (same fields + `password`; empty keeps the saved one) | SmtpSettingsOut; 409 if a changed field is set in the environment (admin) |
 | POST | /api/settings/smtp/test | B | none | `{sent_to}`: one test email to the signed-in admin; 422 with the server's reason on failure (admin) |
@@ -118,7 +124,7 @@ Model fields, in short (exact types are in `schemas.py`):
 - `HistoryOut` = every `email_history` column
 - `RowCountOut` {rows} · `ReasonIn` {reason: 1–500 chars} · `GdnUploadOut` {rows_read, requeued}
 - `VendorEmailIn` {email: one address or comma-separated list} · `VendorOut` {id, party_name, email, is_email_valid}
-- `SettingsModel` {dry_run: bool, send_time: "HH:MM" IST, signature: ≤ 500 chars}
+- `SettingsModel` {dry_run: bool, send_time: "HH:MM" IST, signature: ≤ 500 chars, may span lines; email_subject ({vendor} and {company} filled in), email_intro, email_outro, email_closing, email_company: the email wording, one line each, defaults = the original text}
 
 ## (c) Shared Python functions
 

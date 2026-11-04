@@ -14,7 +14,7 @@ from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from app.contract import BatchStatus, GdnRow
-from app.ingest.clean import clean_str, name_key, normalize_utr, parse_amount, parse_date, split_emails
+from app.ingest.clean import clean_str, name_key, normalize_utr, parse_amount, parse_date, parse_pan, split_emails
 from app.ingest.columns import COLUMNS, REQUIRED
 from app.models import BankTransaction, ConsolidatedEntry, GdnRecord, TdsRecord, UploadBatch, Vendor
 
@@ -84,6 +84,16 @@ def _find_header(rows: list[list], kind: str) -> tuple[int | None, dict | list]:
             return i, cols
         best = min(best, missing, key=len)
     return None, best
+
+
+def detect_kind(data: bytes) -> str | None:
+    """Which of FILE_KINDS this workbook is, by its headers; None if unreadable or if zero or several kinds fit."""
+    try:
+        sheets = _sheets(data).values()
+    except Exception:  # protected or corrupt: the caller falls back to the file name
+        return None
+    fits = [k for k in FILE_KINDS if any(_find_header(rows, k)[0] is not None for rows in sheets)]
+    return fits[0] if len(fits) == 1 else None
 
 
 def _read_rows(data: bytes, kind: str) -> list[tuple[str, int, dict]]:
@@ -197,9 +207,12 @@ def _parse_gdn(rows: list, report: dict) -> list[dict]:
     for sheet, n, raw in _each_row("gdn", rows, report):
         f = lambda field, parse=clean_str, required=False: _field("gdn", raw, field, parse, required)
         try:
+            if (f("vendor_name") or "").lower() in ("total", "grand total"):  # each month sheet ends with a totals row
+                report["rows_skipped"] += 1
+                continue
             out.append({"vendor_name": f("vendor_name", required=True), "invoice_no": f("invoice_no"),
                         "voucher_no": f("voucher_no"), "gdn_date": f("gdn_date", parse_date),
-                        "amount": f("amount", parse_amount), "reason": f("reason")})
+                        "amount": f("amount", parse_amount), "reason": f("reason"), "pan": f("pan", parse_pan)})
         except ValueError as e:
             _issue(report, sheet, n, str(e))
     return out
@@ -215,7 +228,7 @@ def _parse_tds(rows: list, report: dict) -> list[dict]:
                 continue
             out.append({"vendor_name": f("vendor_name", required=True), "invoice_no": f("invoice_no", required=True),
                         "invoice_date": f("invoice_date", parse_date),
-                        "tds_amount": f("tds_amount", parse_amount, True)})
+                        "tds_amount": f("tds_amount", parse_amount, True), "pan": f("pan", parse_pan)})
         except ValueError as e:
             _issue(report, sheet, n, str(e))
     return out
@@ -232,22 +245,24 @@ def _parse_vendors(rows: list, report: dict) -> list[dict]:
         except ValueError as e:
             _issue(report, sheet, n, str(e))
             continue
+        pan = parse_pan(raw.get("pan"))
         valid, invalid = split_emails(raw.get("email"))
         if invalid or not valid:
             _issue(report, sheet, n, f"email needs checking for {name}: {clean_str(raw.get('email'))}", rejected=False)
-            vendor = {"party_name": name, "email": clean_str(raw.get("email")), "is_email_valid": False}
+            vendor = {"party_name": name, "email": clean_str(raw.get("email")), "is_email_valid": False, "pan": pan}
         else:
             extra, bad = split_emails(raw.get("email_2"))
             if bad:  # same rule: a contact-2 cell that doesn't fully parse is not guessed at
                 _issue(report, sheet, n, f"contact 2 email ignored for {name}: {clean_str(raw.get('email_2'))}",
                        rejected=False)
                 extra = []
-            vendor = {"party_name": name, "email": ", ".join(dict.fromkeys(valid + extra)), "is_email_valid": True}
+            vendor = {"party_name": name, "email": ", ".join(dict.fromkeys(valid + extra)), "is_email_valid": True, "pan": pan}
         prev = by_name.get(name_key(name))
         if prev is None:
             by_name[name_key(name)] = vendor
         else:
             report["rows_skipped"] += 1
+            prev["pan"] = prev["pan"] or vendor["pan"]
             if vendor["is_email_valid"] and not prev["is_email_valid"]:
                 prev.update(email=vendor["email"], is_email_valid=True)
     return list(by_name.values())
@@ -269,7 +284,7 @@ def _parse(kind: str, data: bytes, file_name: str) -> tuple[list[dict], dict]:
 def load_gdn_file(file: BinaryIO) -> list[GdnRow]:
     """Parse a GDN Report workbook (all month sheets) into rows. ValueError if the file isn't a GDN Report."""
     rows, _ = _parse("gdn", file.read(), "")
-    return [GdnRow(**r) for r in rows]
+    return [GdnRow(**{k: v for k, v in r.items() if k != "pan"}) for r in rows]  # GdnRow is a frozen contract: no pan
 
 
 class DuplicateUpload(Exception):
@@ -322,5 +337,7 @@ def _upsert_vendors(db: Session, vendors: list[dict]) -> None:
         v = existing.get(name_key(row["party_name"]))
         if v is None:
             db.add(Vendor(**row))
-        elif row["is_email_valid"] and not v.is_email_valid:
-            v.email, v.is_email_valid = row["email"], True
+        else:
+            v.pan = v.pan or row["pan"]
+            if row["is_email_valid"] and not v.is_email_valid:
+                v.email, v.is_email_valid = row["email"], True

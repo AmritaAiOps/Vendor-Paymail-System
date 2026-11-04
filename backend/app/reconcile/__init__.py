@@ -112,8 +112,10 @@ class _Vendors:
     Pharmaceuticals Ltd'. ponytail: prefix match on the bracket text, a two-letter bracket could over-match."""
 
     def __init__(self, vendors):
-        self.exact, self.loose, self.cfa = {}, defaultdict(list), []
+        self.exact, self.loose, self.cfa, self.by_pan = {}, defaultdict(list), [], defaultdict(list)
         for v in vendors:
+            if v.pan:
+                self.by_pan[v.pan].append(v)
             self.exact[name_key(v.party_name)] = v
             self.loose[loose_name_key(v.party_name)].append(v)
             if company := cfa_company_key(v.party_name):
@@ -135,6 +137,12 @@ class _Vendors:
         return found[0] if len(found) == 1 else None
 
 
+    def find_by_pan(self, pan: str | None) -> Vendor | None:
+        """The one vendor with this PAN; None if there is none or several (a company with many GSTIN rows)."""
+        found = self.by_pan.get(pan, [])
+        return found[0] if len(found) == 1 else None
+
+
 class _Batch:
     """Everything decide() needs for one batch's invoices, loaded once: dict lookups, no nested loops."""
 
@@ -146,13 +154,19 @@ class _Batch:
             self.bank.setdefault(b.utr, b)  # strict UTR match; the statement's UTRs are unique for vendor payments
         self.tds = _ByInvoice(session.scalars(where(TdsRecord)), "tds_amount")
         self.gdn = _ByInvoice(session.scalars(where(GdnRecord)), "amount", "reason")
+        pans = defaultdict(set)  # payee name -> PANs the TDS/GDN files give that same name; by name, never by invoice
+        for row in (*session.scalars(where(TdsRecord)), *session.scalars(where(GdnRecord))):
+            if row.pan:
+                pans[name_key(row.vendor_name)].add(row.pan)
+        self.pan = {k: next(iter(v)) for k, v in pans.items() if len(v) == 1}
         self.invoice_vendors = defaultdict(set)
         for e in self.entries:
             self.invoice_vendors[e.invoice_no].add(name_key(e.vendor_name))
 
     def decide(self, e: ConsolidatedEntry, vendors: _Vendors) -> dict:
         b = self.bank.get(e.utr) if e.utr else None
-        vendor = vendors.find(e.vendor_name) or (vendors.find(b.vendor_name) if b else None)  # bank name: 2nd try
+        vendor = (vendors.find(e.vendor_name) or (vendors.find(b.vendor_name) if b else None)  # bank name: 2nd try
+                  or vendors.find_by_pan(self.pan.get(name_key(e.vendor_name))))  # 3rd: PAN from the TDS/GDN rows of that name
         unique = len(self.invoice_vendors[e.invoice_no]) == 1
         tds_amount, _ = self.tds.get(e.vendor_name, e.invoice_no, unique)
         gdn_amount, reason = self.gdn.get(e.vendor_name, e.invoice_no, unique)

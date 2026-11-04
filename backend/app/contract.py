@@ -30,8 +30,8 @@ class ExceptionType(StrEnum):
 
 
 class QueueStatus(StrEnum):
-    DRAFT = "DRAFT"  # made by reconcile; never sent until Send all (POST /api/email-queue/schedule) makes it PENDING
-    PENDING = "PENDING"  # scheduled: the daily job sends it on send_on_date (T+2)
+    DRAFT = "DRAFT"  # no longer made by reconcile (emails start PENDING); an old one waits for Send all (POST /api/email-queue/schedule)
+    PENDING = "PENDING"  # scheduled by default: the daily job sends it on send_on_date (T+2), or Send now sends it at once
     SENDING = "SENDING"  # claimed by a run; left here only if a run died mid-send: check by hand, never auto-retried
     SENT = "SENT"
     FAILED = "FAILED"

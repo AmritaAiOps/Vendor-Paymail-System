@@ -15,13 +15,18 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 # Only the SettingsModel keys ever leave this router: config.get_setting refuses any other name, so no secret can.
 
 
+_WORDING = ("email_subject", "email_intro", "email_outro", "email_closing", "email_company")
+
+
 def _current() -> SettingsModel:
     return SettingsModel(
-        dry_run=dry_run(), send_time=config.get_setting("send_time"), signature=config.get_setting("signature"))
+        dry_run=dry_run(), send_time=config.get_setting("send_time"), signature=config.get_setting("signature"),
+        **{k: config.get_setting(k) for k in _WORDING})
 
 
 def _as_stored(s: SettingsModel) -> dict[str, str]:
-    return {"dry_run": "true" if s.dry_run else "false", "send_time": s.send_time, "signature": s.signature}
+    return {"dry_run": "true" if s.dry_run else "false", "send_time": s.send_time, "signature": s.signature,
+            **{k: getattr(s, k) for k in _WORDING}}
 
 
 @router.get("", response_model=SettingsModel)
@@ -40,12 +45,15 @@ def email_sample():
 def put_settings(body: SettingsModel):
     """send_time format and signature length are checked by SettingsModel (422). Only changed values are saved;
     config.set_setting writes one audit_log row per change. Admin only."""
-    signature = body.signature.strip()
+    signature = "\n".join(line.strip() for line in body.signature.strip().splitlines())  # several lines are fine
     if not signature:
         raise HTTPException(422, "Signature can't be empty")
-    if any(c in signature for c in "\r\n\t"):
-        raise HTTPException(422, "Signature must be one line")
-    new = _as_stored(body.model_copy(update={"signature": signature}))
+    wording = {k: getattr(body, k).strip() for k in _WORDING}
+    if any(c in v for v in wording.values() for c in "\r\n\t"):
+        raise HTTPException(422, "Email wording must be one line each")
+    if not (wording["email_subject"] and wording["email_closing"] and wording["email_company"]):
+        raise HTTPException(422, "Subject, closing and company name can't be empty")
+    new = _as_stored(body.model_copy(update={"signature": signature, **wording}))
     old = _as_stored(_current())
     changed = {k: v for k, v in new.items() if v != old[k]}
     # Validate everything before writing anything: an env var wins on read, so saving it would silently do nothing

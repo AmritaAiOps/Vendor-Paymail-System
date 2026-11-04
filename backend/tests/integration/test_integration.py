@@ -85,21 +85,18 @@ def test_step5_upload_reconcile_queue_send_and_preview_cells(client, db, hist, s
     assert sent_tables == sorted(expected.values())  # what went out is what the preview shows
 
 
-def test_reconcile_drafts_and_send_all_schedules_for_t_plus_2(client, db, hist, smtp, monkeypatch):
+def test_reconcile_schedules_for_t_plus_2_and_send_now_goes_at_once(client, db, hist, smtp, monkeypatch):
     monkeypatch.setenv("DRY_RUN", "false")
     r = client.post("/api/batches", files=files_from(fx))
     batch_id = r.json()["id"]
     client.post(f"/api/batches/{batch_id}/reconcile")
-    statuses = lambda: sorted(q["status"] for q in client.get("/api/email-queue").json())
-    assert statuses() == ["DRAFT", "DRAFT"]
-    assert client.post("/api/scheduler/run-now").json()["sent"] == 0 and smtp.sent == []  # drafts never go
-
-    assert client.post("/api/email-queue/schedule", params={"batch_id": 999}).json() == {"scheduled": 0}
-    assert client.post("/api/email-queue/schedule", params={"batch_id": batch_id}).json() == {"scheduled": 2}
-    assert statuses() == ["PENDING", "PENDING"]
-    assert client.post("/api/email-queue/schedule").json() == {"scheduled": 0}  # nothing left to schedule
+    queue = client.get("/api/email-queue").json()
+    assert [q["status"] for q in queue] == ["PENDING", "PENDING"]  # scheduled by default, no Send all step
+    assert client.post("/api/email-queue/schedule").json() == {"scheduled": 0}  # nothing is waiting as a draft
     assert run_due(db, min(fx.SEND_ON_DATES.values()))["sent"] == 1  # each on its own T+2 date
-    assert client.post("/api/scheduler/run-now").json()["sent"] == 1
+    later = next(q for q in queue if q["status"] == "PENDING" and q["send_on_date"] == max(fx.SEND_ON_DATES.values()).isoformat())
+    assert client.post(f"/api/email-queue/{later['id']}/send-now").json()["sent"] == 1  # ahead of its date, at once
+    assert client.post("/api/scheduler/run-now").json()["sent"] == 0
 
 
 def test_step6_rerun_reconcile_and_scheduler_add_nothing(client, db, hist, smtp, monkeypatch):

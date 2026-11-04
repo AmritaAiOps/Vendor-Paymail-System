@@ -4,13 +4,16 @@ import zipfile
 from typing import Annotated
 
 import msoffcrypto
+import openpyxl
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Response, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import config
 from app.contract import ResultStatus
-from app.ingest import FILE_KINDS, DuplicateUpload, FileError, ingest_batch
+from app.ingest.columns import COLUMNS
+from app.ingest import FILE_KINDS, DuplicateUpload, FileError, detect_kind, ingest_batch
 from app.ingest.clean import clean_str
 from app.models import ConsolidatedEntry, ReconciliationResult, UploadBatch, get_db
 from app.reconcile import reconcile_batch
@@ -79,6 +82,45 @@ def _check_upload(kind: str, upload: UploadFile, password: str | None = None) ->
     elif ext == ".xlsx" and _unzipped_size(data) > _UNZIP_RATIO * limit:
         problem = f"{name} unpacks to more than {_UNZIP_RATIO * config.MAX_UPLOAD_MB} MB; it can't be a normal report"
     return {"file": kind, "message": problem} if problem else (name, data)
+
+
+# One made-up row per file kind, by field name: what the sample downloads show under the real headers
+_SAMPLE = {
+    "consolidated": dict(vendor_name="Sample Vendor Pvt Ltd", utr="UTIBR52026080112345", invoice_no="INV-1001", po_no="PO-77",
+                         grn_no="GRN-5", invoice_amount=118000, cheque_amount=117000, debit_note=0, diff=1000, transaction_date="2026-08-05"),
+    "bank": dict(value_date="2026-08-05", utr="UTIBR52026080112345", debit=117000,
+                 description="NEFT DR-UTIBR52026080112345-SAMPLE VENDOR PVT LTD-UTIB0000001-INV-1001"),
+    "gdn": dict(gdn_date="2026-08-03", vendor_name="Sample Vendor Pvt Ltd", voucher_no="GDN/001", invoice_no="INV-1001",
+                amount=1000, reason="Short supply", pan="29ABCDE1234F1Z5"),
+    "tds": dict(vendor_name="Sample Vendor Pvt Ltd", invoice_no="INV-1001", invoice_date="2026-07-20", pan="ABCDE1234F", tds_amount=1000),
+    "vendors": dict(party_name="Sample Vendor Pvt Ltd", email="accounts@samplevendor.com", pan="29ABCDE1234F1Z5", email_2=""),
+}
+
+
+@router.get("/sample/{kind}.xlsx")
+def sample(kind: str):
+    """The expected layout of one upload file: the real column headers and one made-up row."""
+    if kind not in COLUMNS:
+        raise HTTPException(404, f"Unknown file kind {kind}")
+    fields = COLUMNS[kind]
+    wb = openpyxl.Workbook()
+    wb.active.append([names[0] for names in fields.values()])
+    wb.active.append([_SAMPLE[kind].get(f, "") for f in fields])
+    out = io.BytesIO()
+    wb.save(out)
+    return StreamingResponse(io.BytesIO(out.getvalue()), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": f'attachment; filename="sample-{kind}.xlsx"'})
+
+
+@router.post("/detect", response_model=dict[str, str | None])
+def detect(files: list[UploadFile]):
+    """Which upload slot each file belongs to, by its column headers: {file name: consolidated|bank|gdn|tds|vendors|null}.
+    null = can't tell (protected, unreadable or ambiguous). Nothing is stored."""
+    out = {}
+    for f in files[:len(FILE_KINDS)]:
+        checked = _check_upload("", f)
+        out[f.filename or ""] = None if isinstance(checked, dict) else detect_kind(checked[1])
+    return out
 
 
 @router.post("", status_code=201, response_model=BatchOut)

@@ -104,6 +104,7 @@ class GdnRecord(Base):
     gdn_date: Mapped[date | None]
     amount: Mapped[Decimal | None] = mapped_column(Money)  # Gross Total
     reason: Mapped[str | None] = mapped_column(Text)  # Narration
+    pan: Mapped[str | None] = mapped_column(String(10))  # PAN inside the GSTIN/UIN column
 
 
 class TdsRecord(Base):
@@ -114,6 +115,7 @@ class TdsRecord(Base):
     invoice_no: Mapped[str | None] = mapped_column(String(128), index=True)  # Inv No
     invoice_date: Mapped[date | None]
     tds_amount: Mapped[Decimal] = mapped_column(Money)
+    pan: Mapped[str | None] = mapped_column(String(10))  # PAN OF DEDUCTEE
 
 
 class Vendor(Base):
@@ -122,6 +124,7 @@ class Vendor(Base):
     party_name: Mapped[str] = mapped_column(String(255), unique=True)
     email: Mapped[str | None] = mapped_column(Text)  # comma-separated
     is_email_valid: Mapped[bool] = mapped_column(default=False)
+    pan: Mapped[str | None] = mapped_column(String(10), index=True)  # PAN inside the vendor list's GSTIN/UIN
 
 
 class ReconciliationResult(Base):

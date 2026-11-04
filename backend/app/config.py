@@ -28,7 +28,13 @@ ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").sp
 
 # The only keys the app_settings store accepts, with their defaults. Unknown keys are rejected so the
 # settings API can never read or write other secrets from the environment.
-SETTINGS = {"dry_run": "true", "send_time": "10:00", "signature": "[Name, designation]"}
+SETTINGS = {"dry_run": "true", "send_time": "10:00", "signature": "[Name, designation]",
+            # the wording of vendor emails; {vendor} and {company} work in the subject
+            "email_subject": "Payment Details – {vendor} – {company}",
+            "email_intro": "Please find below the payment details for your invoices.",
+            "email_outro": "Please review and reply with any questions.",
+            "email_closing": "Yours faithfully,",
+            "email_company": "Sudhamayi Enterprises Pvt. Ltd."}
 # SMTP keys are stored the same way but read only through smtp(); smtp_password is never returned by the API
 # or written to audit_log. ponytail: stored in plain text in app_settings; set SMTP_PASSWORD in env to keep it out of the DB.
 SMTP_SETTINGS = {"smtp_host": "", "smtp_port": "587", "smtp_user": "", "smtp_password": "", "smtp_from": "",

@@ -184,3 +184,16 @@ def test_filtered_history_export(client, db, tmp_path, monkeypatch):
     rows = sheet(client.get("/api/email-history/export.xlsx", params={"date_from": "2025-09-13"}).content)
     assert [r[6] for r in rows[1:]] == ["U15", "U14"]  # newest first
     assert len(sheet(client.get("/api/email-history/export.xlsx").content)) == 4  # no filter: the whole file
+
+
+def test_results_filters_and_export(client, db):
+    seed(db)
+    set_status(db, "INV-2305", "EXCEPTION", "UTR_NOT_FOUND")
+    r = client.get("/api/results")
+    assert sorted(x["invoice_no"] for x in r.json()) == ["INV-2291", "INV-2305", "INV-2310"] and r.headers["x-total-count"] == "3"
+    ids = lambda **q: sorted(x["invoice_no"] for x in client.get("/api/results", params=q).json())
+    assert ids(status="EXCEPTION") == ["INV-2305"]
+    assert ids(q="inv-2310") == ["INV-2310"]
+    assert ids(date_from="2999-01-01") == [] and len(ids(date_to="2999-01-01")) == 3 - sum(
+        x["payment_date"] is None for x in r.json())
+    assert len(sheet(client.get("/api/results/export.xlsx", params={"status": "EXCEPTION"}).content)) == 2  # header + 1 row

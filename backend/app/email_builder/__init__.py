@@ -3,6 +3,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from markupsafe import Markup, escape
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -12,9 +13,9 @@ from app.contract import QueueStatus
 from app.email_builder.rows import HEADER, row, sendable
 from app.models import ConsolidatedEntry, EmailItem, EmailQueue, ReconciliationResult, Vendor
 
-COMPANY = "Sudhamayi Enterprises Pvt. Ltd."
 # autoescape covers .html only; the text template is plain text
 _env = Environment(loader=FileSystemLoader(Path(__file__).parent / "templates"), autoescape=select_autoescape(["html"]))
+_env.filters["br"] = lambda s: Markup("<br>").join(escape(line) for line in s.splitlines())  # multi-line signature
 
 
 def build_queue(session: Session, batch_id: int | None = None, result_ids: list[int] | None = None) -> list[int]:
@@ -33,14 +34,14 @@ def build_queue(session: Session, batch_id: int | None = None, result_ids: list[
 
     new_ids = []
     for (vendor_id, due), items in groups.items():
-        # a draft for the same vendor and day takes the new rows, so they stay one email. Never a scheduled
-        # (PENDING) one: what Send all approved must not grow without being approved again.
+        # a not-yet-sent email for the same vendor and day takes the new rows, so they stay one email.
+        # ponytail: if the daily job claims it between this read and the commit, the new rows wait for the next email.
         queue = session.scalar(select(EmailQueue).where(
-            EmailQueue.vendor_id == vendor_id, EmailQueue.send_on_date == due, EmailQueue.status == QueueStatus.DRAFT))
+            EmailQueue.vendor_id == vendor_id, EmailQueue.send_on_date == due, EmailQueue.status.in_([QueueStatus.DRAFT, QueueStatus.PENDING])))
         created = queue is None
         try:
             if created:
-                queue = EmailQueue(vendor_id=vendor_id, send_on_date=due, status=QueueStatus.DRAFT)
+                queue = EmailQueue(vendor_id=vendor_id, send_on_date=due, status=QueueStatus.PENDING)
                 session.add(queue)
                 session.flush()
             session.add_all(EmailItem(email_queue_id=queue.id, reconciliation_result_id=res.id, utr=entry.utr)
@@ -84,7 +85,9 @@ def sample_email() -> tuple[str, str, str]:
 
 
 def _render(vendor_name: str, rows: list[list[str]]) -> tuple[str, str, str]:
-    ctx = dict(vendor_name=vendor_name, header=HEADER, rows=rows,
-               signature=config.get_setting("signature"), company=COMPANY)
-    return (f"Payment Details – {vendor_name} – {COMPANY}",
-            _env.get_template("email.html").render(ctx), _env.get_template("email.txt").render(ctx))
+    company = config.get_setting("email_company")
+    ctx = dict(vendor_name=vendor_name, header=HEADER, rows=rows, signature=config.get_setting("signature"), company=company,
+               intro=config.get_setting("email_intro"), outro=config.get_setting("email_outro"),
+               closing=config.get_setting("email_closing"))
+    subject = config.get_setting("email_subject").replace("{vendor}", vendor_name).replace("{company}", company)
+    return subject, _env.get_template("email.html").render(ctx), _env.get_template("email.txt").render(ctx)

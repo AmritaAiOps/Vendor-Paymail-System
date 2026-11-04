@@ -91,6 +91,7 @@ export type ResultOut = {
 };
 export type RowIssue = { sheet: string; row: number; message: string; rejected: boolean };
 export type FileReport = { file_name: string; rows_read: number; rows_kept: number; rows_skipped: number; rows_rejected: number; issues: RowIssue[] };
+export type ResultFilters = { status?: ResultStatus; vendor?: string; q?: string; date_from?: string; date_to?: string };
 export type BatchOut = { id: number; uploaded_at: string; consolidated_file: string; bank_file: string; gdn_file: string; tds_file: string; vendors_file: string; status: BatchStatus; error_message: string | null };
 export type BatchSummary = { batch: BatchOut; counts: Record<ResultStatus, number>; files: Record<string, FileReport> };
 export type QueueItemOut = { id: number; vendor_id: number; vendor_name: string; to_email: string | null; send_on_date: string; status: QueueStatus; sent_at: string | null; subject: string | null; invoice_count: number };
@@ -104,7 +105,10 @@ export type HistoryOut = {
 };
 export type HistoryFilters = { date_from?: string; date_to?: string; vendor?: string; status?: HistoryStatus; q?: string };
 export type VendorOut = { id: number; party_name: string; email: string | null; is_email_valid: boolean };
-export type SettingsModel = { dry_run: boolean; send_time: string; signature: string };
+export type SettingsModel = {
+  dry_run: boolean; send_time: string; signature: string;
+  email_subject: string; email_intro: string; email_outro: string; email_closing: string; email_company: string;
+};
 export type RunNowOut = { sent: number; failed: number; dry_run: number; not_sent: number };
 export type SmtpSettings = { host: string; port: number; user: string; password_set: boolean; from_email: string; from_name: string; starttls: boolean; locked: string[] };
 /** password: empty keeps the saved one. */
@@ -124,6 +128,12 @@ export const api = {
     UPLOAD_FIELDS.forEach((f) => passwords[f] && form.append(`${f}_password`, passwords[f]!));
     return upload<BatchOut>("/batches", form, onProgress);
   },
+  /** Which slot each file belongs to, by its column headers; null = can't tell. */
+  detectFiles: (files: File[]) => {
+    const form = new FormData();
+    files.forEach((f) => form.append("files", f));
+    return upload<Record<string, UploadField | null>>("/batches/detect", form, () => {});
+  },
   batchSummary: (id: number) => get<BatchSummary>(`/batches/${id}/summary`),
   reconcile: (id: number) => send<BatchSummary>("POST", `/batches/${id}/reconcile`),
   /** One page; total (before paging) comes from X-Total-Count. */
@@ -132,8 +142,14 @@ export const api = {
     const total = res.headers.get("X-Total-Count");
     return { rows: data, total: Number(total) };
   },
-  runNow: () => send<RunNowOut>("POST", "/scheduler/run-now"),
+  /** Results from every upload; total (before paging) comes from X-Total-Count. */
+  resultsPage: async (f: ResultFilters, limit: number, offset: number) => {
+    const { data, res } = await request<ResultOut[]>("GET", "/results", undefined, { ...f, limit, offset });
+    return { rows: data, total: Number(res.headers.get("X-Total-Count")) };
+  },
+  runNow: (ignoreDate?: boolean) => send<RunNowOut>("POST", `/scheduler/run-now${ignoreDate ? "?ignore_date=true" : ""}`),
   /** Send all: every draft becomes scheduled, sent by the daily job on its T+2 date. */
+  sendNow: (id: number) => send<RunNowOut>("POST", `/email-queue/${id}/send-now`),
   scheduleAll: () => send<{ scheduled: number }>("POST", "/email-queue/schedule"),
   emailQueue: (q?: { batch_id?: number; status?: QueueStatus }) => get<QueueItemOut[]>("/email-queue", q),
   emailPreview: (id: number) => get<EmailPreview>(`/email-queue/${id}/preview`),
@@ -181,5 +197,10 @@ export const downloadUrl = {
     const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v) as [string, string][]);
     return `${BASE}/email-history/export.xlsx${qs.size ? `?${qs}` : ""}`;
   },
+  results: (f: ResultFilters) => {
+    const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v) as [string, string][]);
+    return `${BASE}/results/export.xlsx${qs.size ? `?${qs}` : ""}`;
+  },
+  sample: (kind: UploadField) => `${BASE}/batches/sample/${kind}.xlsx`,
   exceptionsExport: () => `${BASE}/exceptions/export.xlsx`,
 };

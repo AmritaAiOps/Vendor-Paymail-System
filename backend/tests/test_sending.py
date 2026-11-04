@@ -321,3 +321,16 @@ def test_saving_send_time_moves_the_running_job(monkeypatch):
     monkeypatch.setattr(scheduler, "send_time", lambda: (7, 45))
     scheduler.reschedule()
     assert str(running.get_job("t_plus_2_send").trigger) == "cron[hour='7', minute='45']"
+
+
+def test_send_now_sends_one_email_ahead_of_its_date(client, db, smtp, no_build_queue):
+    first, second = queue_fixture(db)
+    first.send_on_date = date.max  # not due for a very long time
+    db.commit()
+    r = client.post(f"/api/email-queue/{first.id}/send-now")
+    assert r.status_code == 200 and r.json() == {"sent": 0, "failed": 0, "dry_run": 1, "not_sent": 0}  # DRY_RUN by default
+    rows = history(db, "DRY_RUN")  # one row per invoice, all from the one email; a dry run leaves it PENDING
+    assert rows and {h.email_queue_id for h in rows} == {first.id}
+    first.status = "SENT"
+    db.commit()
+    assert client.post(f"/api/email-queue/{first.id}/send-now").status_code == 409  # already sent

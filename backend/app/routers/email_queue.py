@@ -6,7 +6,8 @@ from app.auth import require_admin
 from app.contract import QueueStatus
 from app.email_builder import render_email
 from app.models import ConsolidatedEntry, EmailItem, EmailQueue, ReconciliationResult, Vendor, get_db
-from app.schemas import EmailPreview, QueueItemOut, ScheduledOut
+from app.schemas import EmailPreview, QueueItemOut, RunNowOut, ScheduledOut
+from app.sending import NotConfigured, send_now
 
 router = APIRouter(prefix="/email-queue", tags=["email-queue"])
 
@@ -43,6 +44,18 @@ def schedule(batch_id: int | None = None, db: Session = Depends(get_db)):
     n = db.execute(q.values(status=QueueStatus.PENDING)).rowcount
     db.commit()
     return ScheduledOut(scheduled=n)
+
+
+@router.post("/{id}/send-now", response_model=RunNowOut, dependencies=[Depends(require_admin)])
+def send_one_now(id: int, db: Session = Depends(get_db)):
+    """Send this one email now, ignoring its T+2 date. 409 if it was already sent or is being sent; 503 as run-now."""
+    try:
+        outcome = send_now(db, id)
+    except NotConfigured as e:
+        raise HTTPException(503, str(e))
+    if outcome is None:
+        raise HTTPException(409, "This email was already sent, or is being sent")
+    return RunNowOut(**{"sent": 0, "failed": 0, "dry_run": 0, "not_sent": 0, outcome: 1})
 
 
 @router.get("/{id}/preview", response_model=EmailPreview)

@@ -5,9 +5,9 @@ import { ErrorBox, Logo, Spinner, btn, card, focusRing, pageTitle } from "./comp
 import { auth } from "./firebase";
 import { useAuth } from "./lib/useAuth";
 import Login from "./pages/Login";
-import BatchResults from "./pages/BatchResults";
+
 import EmailHistory from "./pages/EmailHistory";
-import EmailQueue from "./pages/EmailQueue";
+import VendorEmails from "./pages/VendorEmails";
 import Exceptions from "./pages/Exceptions";
 import ManualReview from "./pages/ManualReview";
 import Settings from "./pages/Settings";
@@ -15,8 +15,7 @@ import Upload from "./pages/Upload";
 
 const pages = [
   { path: "/upload", title: "Upload", element: <Upload /> },
-  { path: "/batch-results", title: "Batch results", element: <BatchResults /> },
-  { path: "/email-queue", title: "Email queue", element: <EmailQueue /> },
+  { path: "/results", title: "Vendor emails", element: <VendorEmails /> },
   { path: "/email-history", title: "Email History", element: <EmailHistory /> },
   { path: "/exceptions", title: "Exceptions", element: <Exceptions /> },
   { path: "/manual-review", title: "Manual review", element: <ManualReview /> },
@@ -106,7 +105,7 @@ export default function App() {
       </a>
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/85 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-6 px-4 sm:px-6 lg:flex-nowrap">
-          <NavLink to="/batch-results" className={`group flex h-16 shrink-0 items-center gap-3.5 rounded-lg ${focusRing}`}>
+          <NavLink to="/results" className={`group flex h-16 shrink-0 items-center gap-3.5 rounded-lg ${focusRing}`}>
             <img src="/amrita-banner.png" alt="Amrita Vishwa Vidyapeetham" className="h-9 w-auto rounded-lg shadow-sm transition-transform duration-150 group-hover:scale-[1.02]" />
             <span aria-hidden className="hidden h-5 w-px bg-slate-200 md:block" />
             <span className="hidden leading-tight md:block">
@@ -130,7 +129,7 @@ export default function App() {
           <UserMenu email={me.data.email} isAdmin={me.data.is_admin} />
         </div>
       </header>
-      <main id="main" className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+      <main id="main" className="mx-auto max-w-[110rem] px-3 py-6 sm:px-4">
         {/* keyed on the path so every page change replays the entrance animation */}
         <div key={pathname} className="animate-fade-up">
           <Routes>
@@ -139,7 +138,8 @@ export default function App() {
             {pages.map((p) => (
               <Route key={p.path} path={p.path} element={p.element} />
             ))}
-            <Route path="/batch-results/:id" element={<BatchResults />} />
+            <Route path="/email-queue" element={<Navigate to="/results" replace />} />
+            <Route path="/batch-results/*" element={<Navigate to="/results" replace />} />
             <Route path="*" element={<h1 className={pageTitle}>Page not found</h1>} />
           </Routes>
         </div>

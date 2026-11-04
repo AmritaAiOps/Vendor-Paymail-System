@@ -144,7 +144,13 @@ class SettingsModel(BaseModel):
     """GET and PUT /api/settings body."""
     dry_run: bool
     send_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")  # HH:MM, IST
-    signature: str = Field(max_length=500)  # sign-off under the email table
+    signature: str = Field(max_length=500)  # sign-off under the email table; may span lines
+    # email wording; defaults keep an older client's PUT (without these) valid
+    email_subject: str = Field("Payment Details – {vendor} – {company}", max_length=200)
+    email_intro: str = Field("Please find below the payment details for your invoices.", max_length=500)
+    email_outro: str = Field("Please review and reply with any questions.", max_length=500)
+    email_closing: str = Field("Yours faithfully,", max_length=100)
+    email_company: str = Field("Sudhamayi Enterprises Pvt. Ltd.", max_length=200)
 
 
 class SmtpSettingsIn(BaseModel):

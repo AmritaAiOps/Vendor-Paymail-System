@@ -151,3 +151,15 @@ def test_reconcile_and_results_endpoints(client, db, queue_calls):
 
 def test_send_on_date_follows_payment_date():
     assert send_on_date(date(2025, 9, 12)) == date(2025, 9, 15)  # the three-row example's Friday payments
+
+
+def test_vendor_found_by_pan_through_the_payee_name():
+    from types import SimpleNamespace as NS
+    from app.reconcile import _Vendors
+    v = [NS(party_name="Absolute Distribution Solutions Pvt Ltd", email="a@x.in", pan="AAKCA1203E"),
+         NS(party_name="Twin Co North", email="b@x.in", pan="ZZZZZ9999Z"), NS(party_name="Twin Co South", email="c@x.in", pan="ZZZZZ9999Z")]
+    vendors = _Vendors(v)
+    assert vendors.find("ADS CHEMIST AND DRUGGIST") is None  # the names differ
+    assert vendors.find_by_pan("AAKCA1203E") is v[0]
+    assert vendors.find_by_pan("ZZZZZ9999Z") is None  # two vendors share it: no guessing
+    assert vendors.find_by_pan(None) is None

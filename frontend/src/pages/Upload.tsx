@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ApiError, UPLOAD_FIELDS, api, errorMessage, type FileReport, type UploadField } from "../api/client";
-import { Empty, ErrorBox, Loading, Spinner, btn, btnPrimary, card, focusRing, num, pageTitle, sectionTitle, td, th } from "../components/ui";
+import { ApiError, UPLOAD_FIELDS, api, downloadUrl, errorMessage, type FileReport, type UploadField } from "../api/client";
+import { DownloadLink, Empty, ErrorBox, Loading, Spinner, btn, btnPrimary, card, focusRing, num, pageTitle, sectionTitle, td, th } from "../components/ui";
 import { setLastBatch } from "../lib/lastBatch";
 
 const ZONES: { field: UploadField; label: string }[] = [
@@ -11,6 +11,10 @@ const ZONES: { field: UploadField; label: string }[] = [
   { field: "gdn", label: "GDN Report" },
   { field: "tds", label: "TDS Excel" },
   { field: "vendors", label: "Vendors List" },
+];
+// fallback when the headers can't be read; a file matching neither is added to its own card by hand
+const BULK_HINTS: [UploadField, RegExp][] = [
+  ["consolidated", /consolidat/i], ["bank", /bank/i], ["gdn", /gdn/i], ["tds", /tds/i], ["vendors", /vendor/i],
 ];
 const MAX_MB = 20; // shortcut: mirrors the server's MAX_UPLOAD_MB default; the server still enforces it, revisit if that setting changes
 
@@ -39,7 +43,7 @@ function Zone({ field, label, file, error, onPick }: { field: UploadField; label
       onDragOver={(e) => { e.preventDefault(); setOver(true); }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => { e.preventDefault(); setOver(false); onPick(e.dataTransfer.files[0]); }}
-      className={`group relative flex h-full cursor-pointer flex-col gap-3 rounded-2xl border-2 border-dashed p-5 transition duration-200 has-[:focus-visible]:ring-4 has-[:focus-visible]:ring-indigo-200 ${state}`}
+      className={`group relative flex flex-1 cursor-pointer flex-col gap-3 rounded-2xl border-2 border-dashed p-5 transition duration-200 has-[:focus-visible]:ring-4 has-[:focus-visible]:ring-indigo-200 ${state}`}
     >
       <input id={id} type="file" accept=".xlsx,.xls" aria-describedby={`${id}-msg`} className="sr-only"
         onChange={(e) => { onPick(e.target.files?.[0]); e.target.value = ""; }} />
@@ -124,6 +128,19 @@ export default function Upload() {
     setErrors((e) => ({ ...e, [field]: problem ?? undefined }));
     setFiles((s) => ({ ...s, [field]: f && !problem ? f : undefined }));
   };
+  // Several files at once: each goes to the card its name points at (e.g. "Bank Statement.xlsx" -> Bank Statement)
+  const [bulkNote, setBulkNote] = useState("");
+  const pickMany = async (list: FileList | File[]) => {
+    const unknown: string[] = [];
+    const all = Array.from(list);
+    // the server reads the column headers; the file name is the fallback (protected files, or no server answer)
+    const byHeaders = await api.detectFiles(all).catch(() => ({} as Record<string, UploadField | null>));
+    for (const f of all) {
+      const field = byHeaders[f.name] ?? BULK_HINTS.find(([, re]) => re.test(f.name))?.[0];
+      if (field) pick(field, f); else unknown.push(f.name);
+    }
+    setBulkNote(unknown.length ? `Couldn't tell which card these belong to, add them to their card: ${unknown.join(", ")}` : "");
+  };
   const ready = UPLOAD_FIELDS.every((f) => files[f]);
   const qc = useQueryClient();
 
@@ -142,7 +159,7 @@ export default function Upload() {
   const run = useMutation({
     mutationFn: () => api.reconcile(batchId!),
     // Reconciling changes every list (results, queue, exceptions, review), so drop all cached data
-    onSuccess: () => qc.invalidateQueries().then(() => navigate(`/batch-results/${batchId}`)),
+    onSuccess: () => qc.invalidateQueries().then(() => navigate("/results")),
   });
 
   const [round, setRound] = useState(0); // remounts the file inputs so Reset really empties them
@@ -174,10 +191,21 @@ export default function Upload() {
       </ol>
 
       <form key={round} className="mt-6" onSubmit={(e) => { e.preventDefault(); up.mutate(); }}>
+        <label htmlFor="file-all"
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => { e.preventDefault(); pickMany(e.dataTransfer.files); }}
+          className="mb-4 flex cursor-pointer flex-col items-center gap-1 rounded-2xl border-2 border-dashed border-indigo-300 bg-indigo-50/50 p-6 text-center transition hover:bg-indigo-50 has-[:focus-visible]:ring-4 has-[:focus-visible]:ring-indigo-200">
+          <input id="file-all" type="file" multiple accept=".xlsx,.xls" className="sr-only"
+            onChange={(e) => { pickMany(e.target.files ?? []); e.target.value = ""; }} />
+          <span className="font-semibold text-slate-900">Select or drop all five files at once</span>
+          <span className="text-xs text-slate-500">Each file goes to its card by its column headers, or by its name (consolidated, bank, GDN, TDS, vendors)</span>
+          {bulkNote && <span role="alert" className="mt-1 text-sm text-rose-700">{bulkNote}</span>}
+        </label>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {ZONES.map((z, i) => (
-            <div key={z.field} className="animate-fade-up" style={{ animationDelay: `${i * 60}ms` }}>
+            <div key={z.field} className="flex animate-fade-up flex-col" style={{ animationDelay: `${i * 60}ms` }}>
               <Zone {...z} file={files[z.field]} error={errors[z.field]} onPick={(f) => pick(z.field, f)} />
+              <div className="mt-1 px-1 text-xs"><DownloadLink href={downloadUrl.sample(z.field)}>Sample format</DownloadLink></div>
               {locked[z.field] && (
                 // Outside the Zone: that card is the file picker's label, so a click inside it would open the picker
                 <div className="mt-2 animate-fade-in">
@@ -227,7 +255,7 @@ export default function Upload() {
       {up.isError && (
         <div className="mt-4">
           <ErrorBox error={up.error} />
-          {duplicateOf && <Link to={`/batch-results/${duplicateOf}`} className={`${btn} mt-2`}>Open batch {duplicateOf} →</Link>}
+          {duplicateOf && <Link to="/results" className={`${btn} mt-2`}>Open results →</Link>}
         </div>
       )}
 

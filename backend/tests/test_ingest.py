@@ -80,7 +80,7 @@ def test_vendor_lookup_company_vs_cfa():
     names = {"Aark Pharmaceuticals": "a@aark.in", "Aark Pharmaceuticals (Neon Cfa)": "neon@aark.in",
              "Bansal Medical Hall (Macleods Cfa)": "b@bansal.in", "Mankind Pharma Ltd. (Cfa -Delhi)": "r@mankind.com",
              "Mankind Pharma Ltd. (Cfa)": "R@mankind.com", "Zen Labs (North)": "n@zen.in", "Zen Labs (South)": "s@zen.in"}
-    vendors = _Vendors([SimpleNamespace(party_name=n, email=e) for n, e in names.items()])
+    vendors = _Vendors([SimpleNamespace(party_name=n, email=e, pan=None) for n, e in names.items()])
     find = lambda n: getattr(vendors.find(n), "party_name", None)
     assert find("AARK PHARMACEUTICALS PRIVATE LIMITED") == "Aark Pharmaceuticals"  # not its CFA
     assert find("Macleods Pharmaceuticals Ltd") == "Bansal Medical Hall (Macleods Cfa)"  # through the CFA
@@ -114,7 +114,7 @@ def test_vendors_deduped_keep_valid_email():
     rows = [{"Vendor\nName": "ABC Pharma Distributors", "Email ID": "broken"}, *fx.VENDORS_SOURCE]
     vendors, report = _parse("vendors", xlsx(rows), "v.xlsx")
     assert vendors == [{"party_name": "ABC Pharma Distributors", "email": "accounts@abcpharma.example",
-                        "is_email_valid": True}]
+                        "is_email_valid": True, "pan": None}]
     assert (report["rows_read"], report["rows_kept"], report["rows_skipped"]) == (3, 1, 2)
     [typo], _ = _parse("vendors", xlsx([{"Vendor\nName": "Harkrishan Medicals",
                                          "Email ID": "harkrishan,medicals@gmail.com"}]), "v.xlsx")
@@ -212,3 +212,11 @@ def test_upload_file_name_is_cleaned(client, db):
     r = client.post("/api/batches", files=upload_files(vendors=(long_name, files_from(fx)["vendors"][1])))
     assert r.status_code == 201, r.text
     assert r.json()["vendors_file"] == "x" * 250 + ".xlsx"
+
+
+def test_gdn_totals_rows_are_skipped():
+    from app.ingest import _parse_gdn
+    rep = {"rows_read": 0, "rows_rejected": 0, "issues": [], "rows_skipped": 0}
+    raw = lambda v, inv: {"vendor_name": v, "invoice_no": inv, "voucher_no": "1", "gdn_date": None, "amount": "10", "reason": "r"}
+    out = _parse_gdn([("APR", 2, raw("ACME", "A-1")), ("APR", 3, raw("Grand Total", None))], rep)
+    assert [r["vendor_name"] for r in out] == ["ACME"] and rep["rows_skipped"] == 1

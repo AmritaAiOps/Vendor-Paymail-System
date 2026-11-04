@@ -19,7 +19,11 @@ function SettingsForm({ saved, readOnly }: { saved: SettingsModel; readOnly: boo
     e.preventDefault();
     const f = new FormData(e.currentTarget);
     if (saved.dry_run && !dryRun && !confirm("Turn DRY_RUN off? The next run will email real vendors.")) return;
-    save.mutate({ dry_run: dryRun, send_time: String(f.get("send_time")), signature: String(f.get("signature")).trim() });
+    const text = (k: string) => String(f.get(k) ?? "").trim();
+    save.mutate({
+      dry_run: dryRun, send_time: text("send_time"), signature: text("signature"), email_subject: text("email_subject"), email_intro: text("email_intro"),
+      email_outro: text("email_outro"), email_closing: text("email_closing"), email_company: text("email_company"),
+    });
   }
 
   return (
@@ -43,11 +47,28 @@ function SettingsForm({ saved, readOnly }: { saved: SettingsModel; readOnly: boo
         <input id="send_time" name="send_time" type="time" required disabled={readOnly} defaultValue={saved.send_time} className={`${input} w-36`} />
       </div>
 
-      <div className="grid gap-1">
-        <label htmlFor="signature" className="font-medium">Signature under the email table</label>
-        <input id="signature" name="signature" required disabled={readOnly} maxLength={MAX_SIGNATURE} defaultValue={saved.signature} className={input}
-          pattern=".*\S.*" title="Signature can't be empty" />
-      </div>
+      <fieldset disabled={readOnly} className="grid gap-3 rounded-2xl border border-slate-200 p-4">
+        <legend className="px-1 font-semibold">Email wording</legend>
+        {([
+          ["email_subject", "Subject", "{vendor} and {company} are filled in for each email", true],
+          ["email_intro", "Opening line", "Under “Dear vendor,”. Leave empty to skip", false],
+          ["email_outro", "Line after the table", "Leave empty to skip", false],
+          ["email_closing", "Closing", "For example: Yours faithfully, / Regards,", true],
+          ["email_company", "Company name", "Bold, last line of the email", true],
+        ] as const).map(([k, label, note, req]) => (
+          <div key={k} className="grid gap-1">
+            <label htmlFor={k} className="text-sm font-medium">{label}</label>
+            <input id={k} name={k} required={req} defaultValue={saved[k]} className={input} />
+            <span className="text-xs text-slate-500">{note}</span>
+          </div>
+        ))}
+        <div className="grid gap-1">
+          <label htmlFor="signature" className="text-sm font-medium">Signature (name, designation, phone…)</label>
+          <textarea id="signature" name="signature" required rows={3} maxLength={MAX_SIGNATURE} defaultValue={saved.signature} className={input}
+            title="Signature can't be empty" />
+          <span className="text-xs text-slate-500">One line each; they appear under the closing.</span>
+        </div>
+      </fieldset>
 
       {/* Hiding admin controls is comfort only: the server refuses them for non-admins */}
       {!readOnly && <div className="flex items-center gap-3">

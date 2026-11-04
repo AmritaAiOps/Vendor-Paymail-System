@@ -119,6 +119,23 @@ def run_due(session: Session, on: date | None = None) -> dict:
     return counts
 
 
+def send_now(session: Session, queue_id: int) -> str | None:
+    """Send one scheduled (or old draft) email immediately, whatever its send date. Returns the outcome
+    (sent, failed, dry_run, not_sent), or None if it was already sent or is being sent."""
+    dry = dry_run()
+    if not dry and not smtp_ready():
+        raise NotConfigured("SMTP isn't set up (Settings → Email server: host and from address): refusing to send")
+    claimed = session.execute(update(EmailQueue)
+                              .where(EmailQueue.id == queue_id, EmailQueue.status.in_([QueueStatus.PENDING, QueueStatus.DRAFT]))
+                              .values(status=QueueStatus.SENDING)).rowcount
+    session.commit()
+    if not claimed:
+        return None
+    outcome = _send_one(session, queue_id, dry)
+    append_history_xlsx(session)
+    return outcome
+
+
 def append_history_xlsx(session: Session) -> None:
     """Person B's Excel copy of the history. Its failure is logged and never affects sending or statuses."""
     try:

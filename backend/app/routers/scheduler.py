@@ -1,4 +1,5 @@
 import contextlib
+from datetime import date
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -49,9 +50,10 @@ router = APIRouter(prefix="/scheduler", tags=["scheduler"], lifespan=lifespan)
 
 
 @router.post("/run-now", response_model=RunNowOut, dependencies=[Depends(require_admin)])
-def run_now(db: Session = Depends(get_db)):
-    """Run the T+2 job now. 503 if real sending is on but SMTP isn't configured (nothing is touched)."""
+def run_now(ignore_date: bool = False, db: Session = Depends(get_db)):
+    """Run the T+2 job now. ignore_date=true also sends emails whose send date is still in the future (for testing).
+    503 if real sending is on but SMTP isn't configured (nothing is touched)."""
     try:
-        return RunNowOut(**run_due(db))
+        return RunNowOut(**run_due(db, date.max if ignore_date else None))
     except NotConfigured as e:
         raise HTTPException(503, str(e))
