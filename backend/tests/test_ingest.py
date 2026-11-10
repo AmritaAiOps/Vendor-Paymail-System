@@ -13,7 +13,7 @@ from app.ingest.clean import (cfa_company_key, clean_str, loose_name_key, name_k
 from app.models import ConsolidatedEntry, Vendor
 from app.reconcile import _Vendors
 from tests.fixtures import three_row_example as fx
-from tests.util import files_from, xlsx
+from tests.util import files_from, post_batch, xlsx
 
 
 def upload_files(**override) -> dict:
@@ -142,7 +142,7 @@ def test_load_gdn_file_contract_function():
 
 
 def test_upload_stores_batch_and_summary(client, db):
-    r = client.post("/api/batches", files=upload_files())
+    r = post_batch(client, upload_files())
     assert r.status_code == 201, r.text
     assert "x-stub" not in r.headers
     batch_id = r.json()["id"]
@@ -157,20 +157,17 @@ def test_upload_stores_batch_and_summary(client, db):
 
 def test_upload_rejects_bad_files_with_reasons(client, db):
     bad_bank = [{k: v for k, v in row.items() if k != "Debit"} for row in fx.BANK_SOURCE]
-    r = client.post("/api/batches", files=upload_files(
+    r = post_batch(client, upload_files(
         bank=("bank.xlsx", xlsx(bad_bank)),
         tds=("tds.csv", b"a,b"),
-        gdn=("gdn.xlsx", b"\xd0\xcf\x11\xe0 protected"),
-        vendors=("vendors.xlsx", b"PK\x03\x04 not really")))
+        gdn=("gdn.xlsx", b"\xd0\xcf\x11\xe0 protected")))
     assert r.status_code == 422
     problems = {p["file"]: p["message"] for p in r.json()["detail"]}
     assert "not an Excel file" in problems["tds"]
     assert "not a valid .xlsx" in problems["gdn"]  # OLE2 signature, but not an encrypted workbook
     assert set(problems) == {"tds", "gdn"}  # file checks run first; parsing waits until every file passes
-    r = client.post("/api/batches", files=upload_files(bank=("bank.xlsx", xlsx(bad_bank))))
+    r = post_batch(client, upload_files(bank=("bank.xlsx", xlsx(bad_bank))))
     assert r.json()["detail"] == [{"file": "bank", "message": 'missing column(s) "Debit"'}]
-    r = client.post("/api/batches", files=upload_files(vendors=("vendors.xlsx", b"PK\x03\x04 not really")))
-    assert "can't be read" in r.json()["detail"][0]["message"]
     assert db.query(ConsolidatedEntry).count() == 0  # nothing stored on failure
 
 
@@ -180,7 +177,7 @@ def test_upload_password_protected_files(client, db):
         out = io.BytesIO()
         OOXMLFile(io.BytesIO(files_from(fx)[kind][1])).encrypt(f"{kind}-pw", out)
         locked[kind] = (f"{kind}.xlsx", out.getvalue())
-    post = lambda **pw: client.post("/api/batches", files=upload_files(**locked), data=pw)
+    post = lambda **pw: post_batch(client, upload_files(**locked), data=pw)
 
     r = post(tds_password="tds-pw")
     assert r.status_code == 422 and r.json()["detail"] == [
@@ -199,7 +196,7 @@ def test_upload_limits(client, db, monkeypatch):
     bomb = io.BytesIO()
     with zipfile.ZipFile(bomb, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("xl/sheet1.xml", b"\0" * (51 * 1024 * 1024))  # compresses to ~50 KB, unpacks past 50x 1 MB
-    r = client.post("/api/batches", files=upload_files(bank=("bank.xlsx", big), tds=("tds.xlsx", b""),
+    r = post_batch(client, upload_files(bank=("bank.xlsx", big), tds=("tds.xlsx", b""),
                                                        gdn=("gdn.xlsx", bomb.getvalue())))
     problems = {p["file"]: p["message"] for p in r.json()["detail"]}
     assert r.status_code == 422 and set(problems) == {"bank", "tds", "gdn"}
@@ -209,7 +206,7 @@ def test_upload_limits(client, db, monkeypatch):
 
 def test_upload_file_name_is_cleaned(client, db):
     long_name = "C:\fakepath\\" + "x" * 300 + ".XLSX"
-    r = client.post("/api/batches", files=upload_files(vendors=(long_name, files_from(fx)["vendors"][1])))
+    r = post_batch(client, upload_files(vendors=(long_name, files_from(fx)["vendors"][1])))
     assert r.status_code == 201, r.text
     assert r.json()["vendors_file"] == "x" * 250 + ".xlsx"
 

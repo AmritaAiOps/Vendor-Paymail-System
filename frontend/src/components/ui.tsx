@@ -114,15 +114,16 @@ export function DownloadLink({ href, children }: { href: string; children: React
 }
 
 /** Native <dialog>: Esc closes, focus is trapped and restored by the browser. */
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, onClose, guard, children }: { title: string; onClose: () => void; guard?: () => boolean; children: ReactNode }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => { ref.current?.showModal(); }, []);
+  // guard() returns false to keep the dialog open (e.g. unsaved edits and the user said no)
   return (
-    <dialog ref={ref} onClose={onClose} aria-labelledby="modal-title"
+    <dialog ref={ref} onClose={onClose} onCancel={(e) => { if (guard && !guard()) e.preventDefault(); }} aria-labelledby="modal-title"
       className="m-auto w-[min(56rem,95vw)] overflow-hidden rounded-xl border border-slate-200 bg-white p-0 text-slate-700 shadow-2xl backdrop:bg-slate-900/40">
       <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3">
         <h2 id="modal-title" className={sectionTitle}>{title}</h2>
-        <button className={btn} onClick={() => ref.current?.close()}>Close</button>
+        <button className={btn} onClick={() => { if (!guard || guard()) ref.current?.close(); }}>Close</button>
       </div>
       <div className="max-h-[75vh] overflow-auto p-5">{children}</div>
     </dialog>

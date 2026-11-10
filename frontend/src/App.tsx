@@ -4,6 +4,7 @@ import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom"
 import { ErrorBox, Logo, Spinner, btn, card, focusRing, pageTitle } from "./components/ui";
 import { auth } from "./firebase";
 import { useAuth } from "./lib/useAuth";
+import { ExitGuardProvider, MissingUtrNotice, useExitGuard } from "./components/ExitGuard";
 import Login from "./pages/Login";
 
 import EmailHistory from "./pages/EmailHistory";
@@ -29,6 +30,7 @@ function UserMenu({ email, isAdmin }: { email: string; isAdmin: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const { pathname } = useLocation();
+  const { requestSignOut } = useExitGuard(); // asks about scheduled mails first
   useEffect(() => {
     if (!open) return;
     const away = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
@@ -64,7 +66,7 @@ function UserMenu({ email, isAdmin }: { email: string; isAdmin: boolean }) {
             </NavLink>
           </div>
           <div className="border-t border-slate-200 pt-1">
-            <button type="button" role="menuitem" onClick={() => signOut(auth)} className={`${item} text-rose-700 hover:bg-rose-50 hover:text-rose-800`}>
+            <button type="button" role="menuitem" onClick={() => { setOpen(false); requestSignOut(); }} className={`${item} text-rose-700 hover:bg-rose-50 hover:text-rose-800`}>
               <svg aria-hidden viewBox="0 0 24 24" className="h-3.5 w-3.5 text-rose-400" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" /></svg>
               Sign out
             </button>
@@ -99,6 +101,7 @@ export default function App() {
     );
   }
   return (
+    <ExitGuardProvider isAdmin={me.data.is_admin} signOut={() => signOut(auth)}>
     <div className="min-h-screen">
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:m-2 focus:rounded-lg focus:bg-white focus:p-2 focus:text-slate-900 focus:ring-2 focus:ring-indigo-500">
         Skip to content
@@ -129,6 +132,7 @@ export default function App() {
           <UserMenu email={me.data.email} isAdmin={me.data.is_admin} />
         </div>
       </header>
+      <div className="px-3 sm:px-4"><MissingUtrNotice /></div>
       <main id="main" className="mx-auto max-w-[110rem] px-3 py-6 sm:px-4">
         {/* keyed on the path so every page change replays the entrance animation */}
         <div key={pathname} className="animate-fade-up">
@@ -145,5 +149,6 @@ export default function App() {
         </div>
       </main>
     </div>
+    </ExitGuardProvider>
   );
 }

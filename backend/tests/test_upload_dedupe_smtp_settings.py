@@ -7,7 +7,7 @@ from app import config
 from app.models import AuditLog, UploadBatch
 from tests.fixtures import special_cases as sc
 from tests.test_sending import smtp  # noqa: F401  (fixture)
-from tests.util import files_from, xlsx
+from tests.util import files_from, post_batch, xlsx
 
 SECRET = "hunter2-SMTP-SECRET"
 
@@ -19,7 +19,7 @@ def no_smtp_env(monkeypatch):
 
 
 def upload(client, files):
-    return client.post("/api/batches", files=files)
+    return post_batch(client, files)
 
 
 def test_same_five_files_twice_is_refused_and_names_the_batch(client, db):

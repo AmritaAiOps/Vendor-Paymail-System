@@ -3,10 +3,11 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app import reconcile
+from app import reconcile, vendor_list
+from app.auth import require_viewer
 from app.history.audit import log_change
 from app.models import Vendor, get_db
-from app.schemas import VendorEmailIn, VendorOut
+from app.schemas import MeOut, VendorEmailIn, VendorOut
 
 router = APIRouter(prefix="/vendors", tags=["vendors"])
 _ADDRESS = re.compile(r"[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+")
@@ -28,7 +29,7 @@ def _parse(text: str) -> tuple[list[str], list[str]]:
 
 
 @router.put("/{id}/email", response_model=VendorOut)
-def set_email(id: int, body: VendorEmailIn, request: Request, db: Session = Depends(get_db)):
+def set_email(id: int, body: VendorEmailIn, request: Request, me: MeOut = Depends(require_viewer), db: Session = Depends(get_db)):
     vendor = db.get(Vendor, id)
     if vendor is None:
         raise HTTPException(404, "Vendor not found")
@@ -38,6 +39,7 @@ def set_email(id: int, body: VendorEmailIn, request: Request, db: Session = Depe
     old = vendor.email
     vendor.email, vendor.is_email_valid = ", ".join(valid), True  # the only two columns B may write
     log_change(db, request, f"vendor {id} ({vendor.party_name}): email changed", old, vendor.email)
+    vendor_list.record_email_fix(db, me.email, vendor, old)  # a vendors list change too: new version in the history
     db.commit()
     try:
         reconcile.requeue_vendor_exceptions(db, id)  # queues this vendor's exception rows that now pass

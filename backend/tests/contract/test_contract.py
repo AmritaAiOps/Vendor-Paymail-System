@@ -28,7 +28,7 @@ def _short(sig: str) -> str:
 def test_endpoints_match_contract():
     documented = {(m, p) for m, p, *_ in _rows("GET|POST|PUT|PATCH|DELETE")}
     actual = {(m.upper(), p) for p, ops in app.openapi()["paths"].items() for m in ops}
-    assert len(documented) == 33
+    assert len(documented) == 41
     assert documented == actual, {"missing": documented - actual, "undocumented": actual - documented}
 
 

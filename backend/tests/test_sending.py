@@ -6,14 +6,13 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app import config
-from app.ingest import ingest_batch
 from app.models import (AuditLog, ConsolidatedEntry, EmailHistory, EmailItem, EmailQueue, ReconciliationResult,
                         SendLog, Vendor)
 from app.reconcile import reconcile_batch, requeue_after_reason, requeue_vendor_exceptions
 from app.sending import NotConfigured, run_due, send_on_date
 from tests.fixtures import special_cases as sc
 from tests.fixtures import three_row_example as fx
-from tests.util import files_from
+from tests.util import ingest
 
 ALL_DUE = date(2025, 9, 17)  # both fixture emails are due by then (Mon 15th and Wed 17th)
 
@@ -69,7 +68,7 @@ def live(monkeypatch):
 
 def queue_fixture(db) -> list[EmailQueue]:
     """The three-row example reconciled, plus its two emails queued by hand (one per payment date)."""
-    batch = ingest_batch(db, files_from(fx))
+    batch = ingest(db, fx)
     reconcile_batch(db, batch.id)
     by_invoice = {e.invoice_no: r for r, e in db.execute(
         select(ReconciliationResult, ConsolidatedEntry)
@@ -228,7 +227,7 @@ def test_excel_failure_never_blocks_the_run(db, smtp, no_build_queue, live, monk
 
 
 def test_not_sent_history_once_per_utr_and_reason(db, no_build_queue):
-    batch = ingest_batch(db, files_from(sc))
+    batch = ingest(db, sc)
     reconcile_batch(db, batch.id)
     blocked = db.scalar(select(func.count()).select_from(ReconciliationResult)
                         .where(ReconciliationResult.status.in_(("EXCEPTION", "MANUAL_REVIEW"))))
@@ -254,7 +253,7 @@ def result_for(db, invoice_no) -> ReconciliationResult:
 
 
 def test_requeue_after_reason(db, no_build_queue):
-    reconcile_batch(db, ingest_batch(db, files_from(sc)).id)
+    reconcile_batch(db, ingest(db, sc).id)
     no_build_queue.clear()
     r = result_for(db, "INV-S06")  # REASON_MISSING, deduction 3,000
     requeue_after_reason(db, r.id, "  Short supply (DN-0999) ")
@@ -272,7 +271,7 @@ def test_requeue_after_reason(db, no_build_queue):
 
 
 def test_requeue_vendor_exceptions(db, no_build_queue):
-    reconcile_batch(db, ingest_batch(db, files_from(sc)).id)
+    reconcile_batch(db, ingest(db, sc).id)
     no_build_queue.clear()
     # INVALID_EMAIL: the vendor page fixes Harkrishan's address
     harkrishan = db.scalar(select(Vendor).where(Vendor.party_name == "Harkrishan Medicals"))

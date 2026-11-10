@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import sqlite3
 
-from sqlalchemy import JSON, Enum, ForeignKey, MetaData, Numeric, String, Text, create_engine, event, false, func
+from sqlalchemy import JSON, Enum, ForeignKey, MetaData, Numeric, String, Text, create_engine, event, false, func, true
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -125,6 +125,36 @@ class Vendor(Base):
     email: Mapped[str | None] = mapped_column(Text)  # comma-separated
     is_email_valid: Mapped[bool] = mapped_column(default=False)
     pan: Mapped[str | None] = mapped_column(String(10), index=True)  # PAN inside the vendor list's GSTIN/UIN
+    # False = removed from the vendors list. The row stays, so old results and emails keep their vendor; the matching
+    # engine only reads active vendors. A removed name that comes back is switched on again, not inserted twice.
+    is_active: Mapped[bool] = mapped_column(default=True, server_default=true())
+
+
+class VendorListState(Base):
+    """One row (id 1): who last changed the stored vendors list, and its version. Every edit or re-upload must present
+    the version it was based on and bumps it in one conditional UPDATE, so two users can't silently overwrite each other."""
+    __tablename__ = "vendor_list_state"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    version: Mapped[int]
+    file_name: Mapped[str] = mapped_column(String(255))  # last uploaded file; "(edited in app)" never replaces it
+    updated_at: Mapped[datetime] = mapped_column(default=config.now_ist)
+    updated_by: Mapped[str] = mapped_column(String(255))
+
+
+class VendorListHistory(Base):
+    """Append-only log of every change to the vendors list."""
+    __tablename__ = "vendor_list_history"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    version: Mapped[int] = mapped_column(index=True)
+    logged_at: Mapped[datetime] = mapped_column(default=config.now_ist, server_default=func.now())
+    user: Mapped[str] = mapped_column(String(255))
+    action: Mapped[str] = mapped_column(String(20))  # UPLOAD | EDIT | EMAIL_FIX
+    file_name: Mapped[str | None] = mapped_column(String(255))
+    vendor_count: Mapped[int]
+    added: Mapped[int] = mapped_column(default=0)
+    removed: Mapped[int] = mapped_column(default=0)
+    changed: Mapped[int] = mapped_column(default=0)
+    details: Mapped[dict | None] = mapped_column(JSON)  # {"added": [names], "removed": [...], "changed": [...]}, capped
 
 
 class ReconciliationResult(Base):

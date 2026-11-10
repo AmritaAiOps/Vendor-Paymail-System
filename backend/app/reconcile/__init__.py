@@ -189,7 +189,7 @@ def reconcile_batch(session: Session, batch_id: int) -> None:
     recomputed unless it's already queued for email). Blocked invoices get their NOT_SENT history row.
     Then calls build_queue for the batch, commits, and updates the history Excel file."""
     batch = _Batch(session, batch_id)
-    vendors = _Vendors(session.scalars(select(Vendor)))
+    vendors = _Vendors(session.scalars(select(Vendor).where(Vendor.is_active)))
     existing = {r.consolidated_entry_id: r for r in session.scalars(select(ReconciliationResult).where(
         ReconciliationResult.consolidated_entry_id.in_([e.id for e in batch.entries])))}
     queued = _queued(session, [r.id for r in existing.values()])
@@ -251,7 +251,7 @@ def requeue_vendor_exceptions(session: Session, vendor_id: int) -> int:
                 & (ReconciliationResult.vendor_id == vendor_id))
                | (ReconciliationResult.exception_type == Ex.VENDOR_NOT_FOUND))).all()
     queued = _queued(session, [r.id for r, _ in rows])
-    vendors, batches, ready = _Vendors(session.scalars(select(Vendor))), {}, []
+    vendors, batches, ready = _Vendors(session.scalars(select(Vendor).where(Vendor.is_active))), {}, []
     for result, entry in rows:
         if result.id in queued:
             continue

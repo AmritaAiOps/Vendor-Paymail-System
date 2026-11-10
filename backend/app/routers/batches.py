@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 from app import config
 from app.contract import ResultStatus
 from app.ingest.columns import COLUMNS
-from app.ingest import FILE_KINDS, DuplicateUpload, FileError, detect_kind, ingest_batch
+from app import vendor_list
+from app.ingest import BATCH_KINDS, FILE_KINDS, DuplicateUpload, FileError, NoVendorList, detect_kind, ingest_batch
 from app.ingest.clean import clean_str
 from app.models import ConsolidatedEntry, ReconciliationResult, UploadBatch, get_db
 from app.reconcile import reconcile_batch
@@ -124,21 +125,25 @@ def detect(files: list[UploadFile]):
 
 
 @router.post("", status_code=201, response_model=BatchOut)
-def upload(consolidated: UploadFile, bank: UploadFile, gdn: UploadFile, tds: UploadFile, vendors: UploadFile,
+def upload(consolidated: UploadFile, bank: UploadFile, gdn: UploadFile, tds: UploadFile,
            consolidated_password: _Password = None, bank_password: _Password = None, gdn_password: _Password = None,
-           tds_password: _Password = None, vendors_password: _Password = None, db: Session = Depends(get_db)):
-    """422 detail = [{"file": kind, "message": ...}] covering every problem in every file; nothing is stored.
+           tds_password: _Password = None, db: Session = Depends(get_db)):
+    """The four per-run files; the vendors list is not part of the upload, it is the stored one (/api/vendor-list).
+    422 detail = [{"file": kind, "message": ...}] covering every problem in every file; nothing is stored.
     A protected file without its <kind>_password (or with a wrong one) adds "password_required": true.
-    409 if files with exactly the same rows were uploaded before (the message names that batch)."""
+    409 if files with exactly the same rows were uploaded before against the same vendors list (the message names that
+    batch); 409 if no vendors list is stored yet (upload one first)."""
     checked = {k: _check_upload(k, u, p) for k, u, p in zip(
-        FILE_KINDS, (consolidated, bank, gdn, tds, vendors),
-        (consolidated_password, bank_password, gdn_password, tds_password, vendors_password))}
+        BATCH_KINDS, (consolidated, bank, gdn, tds),
+        (consolidated_password, bank_password, gdn_password, tds_password))}
     problems = [c for c in checked.values() if isinstance(c, dict)]
     if not problems:
         try:
             return BatchOut.model_validate(ingest_batch(db, checked), from_attributes=True)
         except FileError as e:
             problems = e.problems
+        except NoVendorList as e:
+            raise HTTPException(409, str(e))
         except DuplicateUpload as e:
             raise HTTPException(409, f"These files have exactly the same rows as batch {e.batch_id}. Open that batch instead.")
     raise HTTPException(422, problems)
@@ -166,8 +171,10 @@ def summary(id: int, db: Session = Depends(get_db)):
 
 @router.post("/{id}/reconcile", response_model=BatchSummary)
 def reconcile(id: int, db: Session = Depends(get_db)):
-    """Reconcile every invoice of the batch (re-runnable), queue the emails, return the new counts."""
+    """Reconcile every invoice of the batch (re-runnable) against the stored vendors list, queue the emails, return the new counts."""
     _batch(db, id)
+    if vendor_list.current(db) is None:
+        raise HTTPException(409, str(NoVendorList()))
     reconcile_batch(db, id)
     return summary(id, db)
 

@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ApiError, UPLOAD_FIELDS, api, downloadUrl, errorMessage, type FileReport, type UploadField } from "../api/client";
+import { ApiError, UPLOAD_FIELDS, api, downloadUrl, errorMessage, type DetectedKind, type FileReport, type UploadField } from "../api/client";
 import { DownloadLink, Empty, ErrorBox, Loading, Spinner, btn, btnPrimary, card, focusRing, num, pageTitle, sectionTitle, td, th } from "../components/ui";
+import { VendorListCard, useVendorListStatus } from "../components/VendorListCard";
 import { setLastBatch } from "../lib/lastBatch";
 
 const ZONES: { field: UploadField; label: string }[] = [
@@ -10,10 +11,9 @@ const ZONES: { field: UploadField; label: string }[] = [
   { field: "bank", label: "Bank Statement" },
   { field: "gdn", label: "GDN Report" },
   { field: "tds", label: "TDS Excel" },
-  { field: "vendors", label: "Vendors List" },
 ];
 // fallback when the headers can't be read; a file matching neither is added to its own card by hand
-const BULK_HINTS: [UploadField, RegExp][] = [
+const BULK_HINTS: [DetectedKind, RegExp][] = [
   ["consolidated", /consolidat/i], ["bank", /bank/i], ["gdn", /gdn/i], ["tds", /tds/i], ["vendors", /vendor/i],
 ];
 const MAX_MB = 20; // shortcut: mirrors the server's MAX_UPLOAD_MB default; the server still enforces it, revisit if that setting changes
@@ -77,6 +77,7 @@ function Zone({ field, label, file, error, onPick }: { field: UploadField; label
 }
 
 const FILE_LABEL: Record<string, string> = Object.fromEntries(ZONES.map((z) => [z.field, z.label]));
+const VENDORS_HINT = "The vendors list is stored, not uploaded per run: use Re-upload on the Vendors list card above.";
 
 function FileSummary({ name, report }: { name: string; report: FileReport }) {
   const shown = report.issues.slice(0, 50);
@@ -132,16 +133,24 @@ export default function Upload() {
   const [bulkNote, setBulkNote] = useState("");
   const pickMany = async (list: FileList | File[]) => {
     const unknown: string[] = [];
+    const stored: string[] = [];
     const all = Array.from(list);
     // the server reads the column headers; the file name is the fallback (protected files, or no server answer)
-    const byHeaders = await api.detectFiles(all).catch(() => ({} as Record<string, UploadField | null>));
+    const byHeaders = await api.detectFiles(all).catch(() => ({} as Record<string, DetectedKind | null>));
     for (const f of all) {
       const field = byHeaders[f.name] ?? BULK_HINTS.find(([, re]) => re.test(f.name))?.[0];
-      if (field) pick(field, f); else unknown.push(f.name);
+      if (field === "vendors") stored.push(f.name);
+      else if (field) pick(field, f);
+      else unknown.push(f.name);
     }
-    setBulkNote(unknown.length ? `Couldn't tell which card these belong to, add them to their card: ${unknown.join(", ")}` : "");
+    setBulkNote([
+      stored.length ? `${stored.join(", ")}: ${VENDORS_HINT}` : "",
+      unknown.length ? `Couldn't tell which card these belong to, add them to their card: ${unknown.join(", ")}` : "",
+    ].filter(Boolean).join(" "));
   };
-  const ready = UPLOAD_FIELDS.every((f) => files[f]);
+  const vendors = useVendorListStatus();
+  const noList = vendors.data?.exists === false; // first-time setup: no run until a vendors list is stored
+  const ready = UPLOAD_FIELDS.every((f) => files[f]) && vendors.data?.exists === true;
   const qc = useQueryClient();
 
   const up = useMutation({
@@ -175,7 +184,7 @@ export default function Upload() {
   return (
     <section>
       <h1 className={pageTitle}>Upload</h1>
-      <p className="mt-1 text-slate-500">Add the five Excel files for one reconciliation run.</p>
+      <p className="mt-1 text-slate-500">Add the four Excel files for one reconciliation run. The vendors list below is stored and used automatically.</p>
 
       <ol className="mt-6 flex flex-wrap items-center gap-2 text-sm" aria-label="Steps">
         {["Add files", "Check the files", "Reconcile"].map((label, i) => (
@@ -190,6 +199,8 @@ export default function Upload() {
         ))}
       </ol>
 
+      <div className="mt-6"><VendorListCard /></div>
+
       <form key={round} className="mt-6" onSubmit={(e) => { e.preventDefault(); up.mutate(); }}>
         <label htmlFor="file-all"
           onDragOver={(e) => e.preventDefault()}
@@ -197,8 +208,8 @@ export default function Upload() {
           className="mb-4 flex cursor-pointer flex-col items-center gap-1 rounded-2xl border-2 border-dashed border-indigo-300 bg-indigo-50/50 p-6 text-center transition hover:bg-indigo-50 has-[:focus-visible]:ring-4 has-[:focus-visible]:ring-indigo-200">
           <input id="file-all" type="file" multiple accept=".xlsx,.xls" className="sr-only"
             onChange={(e) => { pickMany(e.target.files ?? []); e.target.value = ""; }} />
-          <span className="font-semibold text-slate-900">Select or drop all five files at once</span>
-          <span className="text-xs text-slate-500">Each file goes to its card by its column headers, or by its name (consolidated, bank, GDN, TDS, vendors)</span>
+          <span className="font-semibold text-slate-900">Select or drop all four files at once</span>
+          <span className="text-xs text-slate-500">Each file goes to its card by its column headers, or by its name (consolidated, bank, GDN, TDS)</span>
           {bulkNote && <span role="alert" className="mt-1 text-sm text-rose-700">{bulkNote}</span>}
         </label>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -237,7 +248,10 @@ export default function Upload() {
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-slate-500">{ready ? "All set. Upload to check the files." : "Choose all five files to continue."}</p>
+              <p className={`text-sm ${noList ? "text-amber-800" : "text-slate-500"}`}>
+                {noList ? "Upload the vendors list first. A run can't start without it."
+                  : ready ? "All set. Upload to check the files." : "Choose all four files to continue."}
+              </p>
             )}
             <div className="flex gap-2">
               <button type="submit" className={`${btnPrimary} flex-1 py-2.5`} disabled={!ready || up.isPending || up.isSuccess}>

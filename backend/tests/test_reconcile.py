@@ -5,13 +5,12 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from app.ingest import ingest_batch
 from app.models import BankTransaction, ConsolidatedEntry, EmailItem, EmailQueue, ReconciliationResult, Vendor
 from app.reconcile import reconcile_batch
 from app.sending import send_on_date
 from tests.fixtures import special_cases as sc
 from tests.fixtures import three_row_example as fx
-from tests.util import files_from
+from tests.util import ingest
 
 
 @pytest.fixture
@@ -24,7 +23,7 @@ def queue_calls(monkeypatch):
 
 def reconciled(db, fixture) -> dict:
     """Upload the fixture's five files, reconcile, return {(invoice no, utr): (result, entry)}."""
-    batch = ingest_batch(db, files_from(fixture))
+    batch = ingest(db, fixture)
     reconcile_batch(db, batch.id)
     rows = db.execute(select(ReconciliationResult, ConsolidatedEntry)
                       .join(ConsolidatedEntry, ConsolidatedEntry.id == ReconciliationResult.consolidated_entry_id)
@@ -92,7 +91,7 @@ def test_vendor_matched_by_name_variant_is_stored(db, queue_calls):
 
 
 def test_rerun_recomputes_but_leaves_queued_results_alone(db, queue_calls):
-    batch = ingest_batch(db, files_from(sc))
+    batch = ingest(db, sc)
     reconcile_batch(db, batch.id)
     ids = lambda: {r.consolidated_entry_id: r for r in db.scalars(select(ReconciliationResult))}
     first = ids()
@@ -113,7 +112,7 @@ def test_rerun_recomputes_but_leaves_queued_results_alone(db, queue_calls):
 
 
 def test_reconcile_and_results_endpoints(client, db, queue_calls):
-    batch_id = ingest_batch(db, files_from(sc)).id
+    batch_id = ingest(db, sc).id
     r = client.post(f"/api/batches/{batch_id}/reconcile")
     assert r.status_code == 200 and "x-stub" not in r.headers
     counts = r.json()["counts"]

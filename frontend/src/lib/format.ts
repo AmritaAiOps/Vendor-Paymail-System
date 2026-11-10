@@ -14,6 +14,17 @@ export function formatDateTime(iso: string | null | undefined): string {
   return t ? `${formatDate(iso)} ${t[1]}` : formatDate(iso);
 }
 
+/** "in 1 day 4 hrs", "in 3 hrs", "in 25 min"; "due now" once the time has passed. Days and hours only, minutes when under an hour. */
+export function timeRemaining(targetMs: number, nowMs: number = Date.now()): string {
+  const diff = targetMs - nowMs;
+  if (diff <= 0) return "due now";
+  const days = Math.floor(diff / 86_400_000);
+  const hrs = Math.floor((diff % 86_400_000) / 3_600_000);
+  if (days > 0) return `in ${days} day${days > 1 ? "s" : ""}${hrs ? ` ${hrs} hr${hrs > 1 ? "s" : ""}` : ""}`;
+  if (hrs > 0) return `in ${hrs} hr${hrs > 1 ? "s" : ""}`;
+  return `in ${Math.max(1, Math.ceil(diff / 60_000))} min`;
+}
+
 // ISO "YYYY-MM-DD" (or datetime) -> "05-Aug-26". Sliced as text so timezones can't shift the day.
 export function formatDate(iso: string | null | undefined): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso ?? "");

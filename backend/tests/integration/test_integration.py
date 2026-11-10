@@ -18,7 +18,7 @@ from tests.fixtures import special_cases as sc
 from tests.fixtures import three_row_example as fx
 from tests.test_email_builder import table
 from tests.test_sending import smtp  # noqa: F401  (fixture)
-from tests.util import files_from, xlsx as make_xlsx
+from tests.util import files_from, post_batch, xlsx as make_xlsx
 
 SC_SEND_ON = "2025-09-18"  # special cases are all paid Tue 16 Sep 2025 -> T+2 = Thu 18 Sep
 
@@ -32,7 +32,7 @@ def hist(tmp_path, monkeypatch):
 
 
 def upload_and_reconcile(client, fixture) -> int:
-    r = client.post("/api/batches", files=files_from(fixture))
+    r = post_batch(client, files_from(fixture))
     assert r.status_code == 201, r.text
     batch_id = r.json()["id"]
     assert client.post(f"/api/batches/{batch_id}/reconcile").status_code == 200
@@ -87,7 +87,7 @@ def test_step5_upload_reconcile_queue_send_and_preview_cells(client, db, hist, s
 
 def test_reconcile_schedules_for_t_plus_2_and_send_now_goes_at_once(client, db, hist, smtp, monkeypatch):
     monkeypatch.setenv("DRY_RUN", "false")
-    r = client.post("/api/batches", files=files_from(fx))
+    r = post_batch(client, files_from(fx))
     batch_id = r.json()["id"]
     client.post(f"/api/batches/{batch_id}/reconcile")
     queue = client.get("/api/email-queue").json()

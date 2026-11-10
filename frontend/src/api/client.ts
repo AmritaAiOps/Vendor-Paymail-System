@@ -114,9 +114,27 @@ export type SmtpSettings = { host: string; port: number; user: string; password_
 /** password: empty keeps the saved one. */
 export type SmtpSettingsIn = Omit<SmtpSettings, "password_set" | "locked"> & { password: string };
 export type MeOut = { email: string; is_admin: boolean };
+export type VendorListStatus = { exists: boolean; version: number; file_name: string | null; updated_at: string | null; updated_by: string | null; total: number };
+export type VendorRow = { id: number | null; party_name: string; email: string | null };
+export type VendorListOut = { version: number; vendors: VendorRow[] };
+export type VendorChange = { party_name: string; old_party_name: string; old_email: string | null; new_email: string | null };
+export type VendorPreview = {
+  file_name: string; total: number; base_version: number; new: VendorRow[]; removed: VendorRow[]; changed: VendorChange[]; unchanged: number; issues: RowIssue[];
+};
+export type VendorSaveOut = { status: VendorListStatus; requeued: number };
+export type VendorHistory = {
+  id: number; version: number; logged_at: string; user: string; action: "UPLOAD" | "EDIT" | "EMAIL_FIX" | string; file_name: string | null;
+  vendor_count: number; added: number; removed: number; changed: number; details: { added?: string[]; removed?: string[]; changed?: string[] } | null;
+};
+export type PendingMail = { id: number; vendor_id: number; vendor_name: string; invoice_count: number; send_on_date: string; scheduled_at: string; missing_utr_count: number };
+export type PendingSummary = { total: number; missing_utr_mails: number; missing_utr_invoices: number; items: PendingMail[] };
+export type SendAllOut = { sent: number; failed: number; dry_run: number; not_sent: number; held: number; already_done: number };
 
-export const UPLOAD_FIELDS = ["consolidated", "bank", "gdn", "tds", "vendors"] as const;
+/** The files uploaded for every run. The vendors list is not one of them: it is stored once (see api.vendorList*). */
+export const UPLOAD_FIELDS = ["consolidated", "bank", "gdn", "tds"] as const;
 export type UploadField = (typeof UPLOAD_FIELDS)[number];
+/** What detectFiles can name: the four per-run files, or a vendors list that belongs on the Vendors list card. */
+export type DetectedKind = UploadField | "vendors";
 
 export const api = {
   health: () => get<{ status: string }>("/health"),
@@ -132,7 +150,7 @@ export const api = {
   detectFiles: (files: File[]) => {
     const form = new FormData();
     files.forEach((f) => form.append("files", f));
-    return upload<Record<string, UploadField | null>>("/batches/detect", form, () => {});
+    return upload<Record<string, DetectedKind | null>>("/batches/detect", form, () => {});
   },
   batchSummary: (id: number) => get<BatchSummary>(`/batches/${id}/summary`),
   reconcile: (id: number) => send<BatchSummary>("POST", `/batches/${id}/reconcile`),
@@ -169,6 +187,30 @@ export const api = {
     form.append("file", file);
     return send<{ rows_read: number; requeued: number }>("POST", "/manual-review/gdn-upload", form);
   },
+  vendorListStatus: () => get<VendorListStatus>("/vendor-list"),
+  /** The stored list for the edit table, with the version to send back when saving. */
+  vendorList: () => get<VendorListOut>("/vendor-list/vendors"),
+  /** 409 = somebody saved since baseVersion; 422 detail = [{row, field, message}]. */
+  saveVendorList: (baseVersion: number, vendors: VendorRow[]) => send<VendorSaveOut>("PUT", "/vendor-list/vendors", { base_version: baseVersion, vendors }),
+  /** Reads the file and says what replacing the stored list would change; stores nothing. */
+  previewVendorList: (file: File, password?: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (password) form.append("password", password);
+    return upload<VendorPreview>("/vendor-list/preview", form, () => {});
+  },
+  replaceVendorList: (file: File, baseVersion: number, password?: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("base_version", String(baseVersion));
+    if (password) form.append("password", password);
+    return upload<VendorSaveOut>("/vendor-list/replace", form, () => {});
+  },
+  vendorListHistory: () => get<VendorHistory[]>("/vendor-list/history"),
+  /** Scheduled (not yet sent) emails, for the exit pop-up, and the missing-UTR count. */
+  pendingSummary: () => get<PendingSummary>("/email-queue/pending-summary"),
+  /** Emails flagged with a missing UTR are held (stay scheduled) unless includeMissingUtr. */
+  sendAllNow: (ids: number[], includeMissingUtr: boolean) => send<SendAllOut>("POST", "/email-queue/send-all-now", { ids, include_missing_utr: includeMissingUtr }),
   setVendorEmail: (id: number, email: string) => send<VendorOut>("PUT", `/vendors/${id}/email`, { email }),
   settings: () => get<SettingsModel>("/settings"),
   saveSettings: (s: SettingsModel) => send<SettingsModel>("PUT", "/settings", s),
@@ -201,6 +243,6 @@ export const downloadUrl = {
     const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v) as [string, string][]);
     return `${BASE}/results/export.xlsx${qs.size ? `?${qs}` : ""}`;
   },
-  sample: (kind: UploadField) => `${BASE}/batches/sample/${kind}.xlsx`,
+  sample: (kind: DetectedKind) => `${BASE}/batches/sample/${kind}.xlsx`,
   exceptionsExport: () => `${BASE}/exceptions/export.xlsx`,
 };

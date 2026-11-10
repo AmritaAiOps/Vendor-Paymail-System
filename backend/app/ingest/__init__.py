@@ -16,9 +16,10 @@ from sqlalchemy.orm import Session
 from app.contract import BatchStatus, GdnRow
 from app.ingest.clean import clean_str, name_key, normalize_utr, parse_amount, parse_date, parse_pan, split_emails
 from app.ingest.columns import COLUMNS, REQUIRED
-from app.models import BankTransaction, ConsolidatedEntry, GdnRecord, TdsRecord, UploadBatch, Vendor
+from app.models import BankTransaction, ConsolidatedEntry, GdnRecord, TdsRecord, UploadBatch
 
-FILE_KINDS = ("consolidated", "bank", "gdn", "tds", "vendors")
+FILE_KINDS = ("consolidated", "bank", "gdn", "tds", "vendors")  # every layout the app can read (detect, samples)
+BATCH_KINDS = FILE_KINDS[:4]  # uploaded for every run. The vendors list is not: it is stored once (app.vendor_list)
 _NEFT = re.compile(r"^NEFT DR-[A-Z0-9]+-(.+)-([A-Z]{4}0[A-Z0-9]{6})-")  # NEFT DR-<utr>-<name>-<ifsc>-...
 
 
@@ -295,17 +296,32 @@ class DuplicateUpload(Exception):
         self.batch_id = batch_id
 
 
-def rows_sha256(parsed: dict[str, list[dict]]) -> str:
-    """Fingerprint of the parsed rows, not the file bytes: re-saving the same workbook changes its bytes, not its rows."""
-    return hashlib.sha256(json.dumps([parsed[k] for k in FILE_KINDS], sort_keys=True, default=str).encode()).hexdigest()
+class NoVendorList(Exception):
+    """No vendors list has been stored yet: a run can't be matched to vendors, so nothing is ingested."""
+
+    def __init__(self):
+        super().__init__("No vendors list has been uploaded yet. Upload the vendors list on the Upload page first.")
+
+
+def rows_sha256(parsed: dict[str, list[dict]], vendor_list_version: int = 0) -> str:
+    """Fingerprint of the parsed rows, not the file bytes: re-saving the same workbook changes its bytes, not its rows.
+    It includes the vendors list version: the same four files against a changed list can give different results."""
+    rows = [parsed[k] for k in BATCH_KINDS] + [vendor_list_version]
+    return hashlib.sha256(json.dumps(rows, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def ingest_batch(db: Session, files: dict[str, tuple[str, bytes]]) -> UploadBatch:
-    """files = {kind: (file name, bytes)} for all five kinds. Raises DuplicateUpload if the same five files were
-    uploaded before (same rows). Parses everything first; if any file is unusable, raises FileError listing every problem and
-    stores nothing. Otherwise stores the batch and its rows, commits."""
+    """files = {kind: (file name, bytes)} for the four BATCH_KINDS. Raises NoVendorList if no vendors list is stored, and
+    DuplicateUpload if the same files were uploaded before against the same list version (same rows). Parses everything
+    first; if any file is unusable, raises FileError listing every problem and stores nothing. Otherwise stores the batch
+    and its rows, commits. The vendors list is never read from the files: matching uses the stored list."""
+    from app.vendor_list import current  # here, not at the top: vendor_list imports this module
+
+    state = current(db)
+    if state is None:
+        raise NoVendorList()
     parsed, reports, problems = {}, {}, []
-    for kind in FILE_KINDS:
+    for kind in BATCH_KINDS:
         name, data = files[kind]
         try:
             parsed[kind], reports[kind] = _parse(kind, data, name)
@@ -313,31 +329,22 @@ def ingest_batch(db: Session, files: dict[str, tuple[str, bytes]]) -> UploadBatc
             problems += e.problems
     if problems:
         raise FileError(problems)
-    digest = rows_sha256(parsed)
+    digest = rows_sha256(parsed, state.version)
     if (earlier := db.scalar(select(UploadBatch.id).where(UploadBatch.files_sha256 == digest).limit(1))) is not None:
         raise DuplicateUpload(earlier)
 
     batch = UploadBatch(status=BatchStatus.UPLOADED, ingest_report=reports, files_sha256=digest,
-                        **{f"{kind}_file": files[kind][0][:255] for kind in FILE_KINDS})
+                        vendors_file=state.file_name, **{f"{kind}_file": files[kind][0][:255] for kind in BATCH_KINDS})
     db.add(batch)
     db.flush()
     for model, kind in ((ConsolidatedEntry, "consolidated"), (BankTransaction, "bank"),
                         (GdnRecord, "gdn"), (TdsRecord, "tds")):
         db.execute(insert(model), [{**r, "batch_id": batch.id} for r in parsed[kind]])
-    _upsert_vendors(db, parsed["vendors"])
     db.commit()
     return batch
 
 
-def _upsert_vendors(db: Session, vendors: list[dict]) -> None:
-    """Vendors are global, not per batch. New names are added. An existing vendor's email is only filled in
-    when it has no valid one, so an email fixed on the vendors page is never overwritten by an upload."""
-    existing = {name_key(v.party_name): v for v in db.scalars(select(Vendor))}
-    for row in vendors:
-        v = existing.get(name_key(row["party_name"]))
-        if v is None:
-            db.add(Vendor(**row))
-        else:
-            v.pan = v.pan or row["pan"]
-            if row["is_email_valid"] and not v.is_email_valid:
-                v.email, v.is_email_valid = row["email"], True
+def parse_vendors_file(data: bytes, file_name: str) -> tuple[list[dict], dict]:
+    """Rows ({party_name, email, is_email_valid, pan}) and the row report of a vendors list workbook.
+    FileError (nothing is stored) if it can't be read, lacks the columns, or has no usable rows."""
+    return _parse("vendors", data, file_name)
