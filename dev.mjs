@@ -5,6 +5,11 @@ import { resolve } from "node:path";
 
 const win = process.platform === "win32";
 const python = resolve("backend", ".venv", win ? "Scripts/python.exe" : "bin/python");
+
+// bring the dev database up to date first: a missing migration otherwise shows up as 500s on whatever page needs it
+process.loadEnvFile(".env");
+if (spawnSync(python, ["-m", "alembic", "upgrade", "head"], { cwd: "backend", stdio: "inherit" }).status !== 0) process.exit(1);
+
 const procs = [
   spawn(python, ["-m", "uvicorn", "app.main:app", "--reload", "--env-file", "../.env"], { cwd: "backend", stdio: "inherit" }),
   spawn(process.execPath, ["node_modules/vite/bin/vite.js"], { cwd: "frontend", stdio: "inherit" }),

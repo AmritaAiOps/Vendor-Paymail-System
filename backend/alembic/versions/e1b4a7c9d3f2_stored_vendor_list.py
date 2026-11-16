@@ -53,7 +53,7 @@ def upgrade() -> None:
         now = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None)  # stored timestamps are IST wall-clock
         bind.execute(sa.text("INSERT INTO vendor_list_state (id, version, file_name, updated_at, updated_by) "
                              "VALUES (1, 1, :f, :t, 'system (migrated)')"), {"f": name, "t": now})
-        bind.execute(sa.text("INSERT INTO vendor_list_history (version, user, action, file_name, vendor_count, added, removed, changed) "
+        bind.execute(sa.text("INSERT INTO vendor_list_history (version, \"user\", action, file_name, vendor_count, added, removed, changed) "
                              "VALUES (1, 'system (migrated)', 'UPLOAD', :f, :n, :n, 0, 0)"), {"f": name, "n": count})
 
 
