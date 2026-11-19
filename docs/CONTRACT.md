@@ -114,8 +114,7 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | GET | /api/settings | B | none | SettingsModel |
 | PUT | /api/settings | B | SettingsModel | SettingsModel (admin); saving send_time moves the daily job at once |
 | GET | /api/settings/email-sample | B | none | EmailPreview: the real email template with made-up rows and the current signature |
-| GET | /api/settings/smtp | B | none | SmtpSettingsOut `{host, port, user, password_set, from_email, from_name, starttls, locked}`; the password is never returned (admin) |
-| PUT | /api/settings/smtp | B | SmtpSettingsIn (same fields + `password`; empty keeps the saved one) | SmtpSettingsOut; 409 if a changed field is set in the environment (admin) |
+| GET | /api/settings/smtp | B | none | SmtpSettingsOut `{host, port, user, password_set, from_email, from_name, starttls}`: the SMTP_* environment settings, read-only; the password is never returned (admin) |
 | POST | /api/settings/smtp/test | B | none | `{sent_to}`: one test email to the signed-in admin; 422 with the server's reason on failure (admin) |
 
 Model fields, in short (exact types are in `schemas.py`):
@@ -159,7 +158,7 @@ The signature column is checked by the contract test. Module prefixes are droppe
 What each one does:
 
 - `get_setting(name)`: env var `NAME` (upper-case) first, then the `app_settings` row, then the default. Only known names are allowed: `dry_run` (default `"true"`), `send_time` (default `"10:00"`) and `signature` (default `"[Name, designation]"`, the sign-off `render_email` puts under the table). KeyError for anything else, so secrets in the environment can't be read through it. An env var set to an empty string counts as unset.
-- `smtp()`: the mail server settings in effect. Each of `smtp_host`, `smtp_port`, `smtp_user`, `smtp_password`, `smtp_from`, `smtp_from_name`, `smtp_starttls` is env var (upper-case) first, then the `app_settings` row (Settings page), then the default. `set_setting` accepts these keys too and never writes the password to `audit_log`.
+- `smtp()`: the mail server settings in effect, from the environment only: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_FROM_NAME`, `SMTP_STARTTLS`, else the defaults. Never stored in the database; `set_setting` rejects these keys.
 - **Timestamps** (`uploaded_at`, `sent_at`, `logged_at`, ...) are stored as IST wall-clock time without an offset (`config.now_ist()`). Rows written before this change are UTC.
 - `set_setting(name, value)`: upserts the `app_settings` row and appends to `audit_log` in one commit. An env var with the same name still wins on read.
 - `load_gdn_file(file)`: parses a GDN Report workbook (all month sheets) into `GdnRow`s (`contract.py`). It doesn't write to the DB. ValueError if the file isn't a GDN Report.

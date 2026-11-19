@@ -153,19 +153,8 @@ class SettingsModel(BaseModel):
     email_company: str = Field("Sudhamayi Enterprises Pvt. Ltd.", max_length=200)
 
 
-class SmtpSettingsIn(BaseModel):
-    """PUT /api/settings/smtp. password: None or "" keeps the saved one (it is never sent back)."""
-    host: str = Field(max_length=255)
-    port: int = Field(ge=1, le=65535)
-    user: str = Field(max_length=255)
-    password: str | None = Field(None, max_length=255)
-    from_email: str = Field(max_length=255)
-    from_name: str = Field(max_length=255)
-    starttls: bool
-
-
 class SmtpSettingsOut(BaseModel):
-    """GET/PUT /api/settings/smtp. locked = fields set in the server environment (they win; edit them there)."""
+    """GET /api/settings/smtp: the SMTP_* environment settings in effect. The password is never returned."""
     host: str
     port: int
     user: str
@@ -173,7 +162,6 @@ class SmtpSettingsOut(BaseModel):
     from_email: str
     from_name: str
     starttls: bool
-    locked: list[str]
 
 
 class MeOut(BaseModel):

@@ -1,4 +1,4 @@
-"""Duplicate uploads, superseded exceptions/manual review rows, the SMTP settings API and IST timestamps."""
+"""Duplicate uploads, superseded exceptions/manual review rows, the read-only SMTP settings API and IST timestamps."""
 from datetime import timedelta
 
 import pytest
@@ -52,30 +52,17 @@ def test_a_newer_batch_replaces_the_same_invoices_on_exceptions_and_manual_revie
         assert len(rows) == len(before) and {r["batch_id"] for r in rows} <= {two}
 
 
-def test_smtp_settings_save_never_return_the_password(client, db):
+def test_smtp_settings_come_from_env_only_and_never_return_the_password(client, monkeypatch):
     assert client.get("/api/settings/smtp").json() == {
         "host": "", "port": 587, "user": "", "password_set": False, "from_email": "",
-        "from_name": "Sudhamayi Enterprises Pvt. Ltd.", "starttls": True, "locked": []}
-    body = {"host": "smtp.example.com", "port": 465, "user": "mailer", "password": SECRET,
-            "from_email": "payments@example.com", "from_name": "Payments", "starttls": False}
-    r = client.put("/api/settings/smtp", json=body)
-    assert r.status_code == 200 and SECRET not in r.text and r.json()["password_set"] is True
-    assert config.smtp()["password"] == SECRET and config.smtp()["port"] == 465
-    assert all(SECRET not in (a.old_value or "") + (a.new_value or "") for a in db.query(AuditLog))
-
-    # Blank password keeps the saved one
-    client.put("/api/settings/smtp", json={**body, "password": "", "host": "smtp2.example.com"})
-    assert config.smtp()["password"] == SECRET and config.smtp()["host"] == "smtp2.example.com"
-
-
-def test_smtp_settings_reject_env_locked_and_bad_from(client, monkeypatch):
-    monkeypatch.setenv("SMTP_HOST", "env.example.com")
-    body = {"host": "ui.example.com", "port": 587, "user": "", "password": None,
-            "from_email": "payments@example.com", "from_name": "Payments", "starttls": True}
-    r = client.put("/api/settings/smtp", json=body)
-    assert r.status_code == 409 and "SMTP_HOST" in r.json()["detail"]
-    assert client.get("/api/settings/smtp").json()["locked"] == ["host"]
-    assert client.put("/api/settings/smtp", json={**body, "host": "env.example.com", "from_email": "nope"}).status_code == 422
+        "from_name": "Sudhamayi Enterprises Pvt. Ltd.", "starttls": True}
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", SECRET)
+    r = client.get("/api/settings/smtp")
+    assert r.json()["host"] == "smtp.example.com" and r.json()["password_set"] is True and SECRET not in r.text
+    assert client.put("/api/settings/smtp", json={"host": "ui.example.com"}).status_code == 405  # no saving from the page
+    with pytest.raises(KeyError):
+        config.set_setting("smtp_host", "ui.example.com")
 
 
 def test_smtp_test_email_goes_to_the_signed_in_admin(client, smtp, monkeypatch):

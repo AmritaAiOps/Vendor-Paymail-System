@@ -110,9 +110,8 @@ export type SettingsModel = {
   email_subject: string; email_intro: string; email_outro: string; email_closing: string; email_company: string;
 };
 export type RunNowOut = { sent: number; failed: number; dry_run: number; not_sent: number };
-export type SmtpSettings = { host: string; port: number; user: string; password_set: boolean; from_email: string; from_name: string; starttls: boolean; locked: string[] };
+export type SmtpSettings = { host: string; port: number; user: string; password_set: boolean; from_email: string; from_name: string; starttls: boolean };
 /** password: empty keeps the saved one. */
-export type SmtpSettingsIn = Omit<SmtpSettings, "password_set" | "locked"> & { password: string };
 export type MeOut = { email: string; is_admin: boolean };
 export type VendorListStatus = { exists: boolean; version: number; file_name: string | null; updated_at: string | null; updated_by: string | null; total: number };
 export type VendorRow = { id: number | null; party_name: string; email: string | null };
@@ -222,7 +221,6 @@ export const api = {
   settings: () => get<SettingsModel>("/settings"),
   saveSettings: (s: SettingsModel) => send<SettingsModel>("PUT", "/settings", s),
   smtpSettings: () => get<SmtpSettings>("/settings/smtp"),
-  saveSmtpSettings: (s: SmtpSettingsIn) => send<SmtpSettings>("PUT", "/settings/smtp", s),
   testSmtp: () => send<{ sent_to: string }>("POST", "/settings/smtp/test"),
   emailSample: () => get<EmailPreview>("/settings/email-sample"),
 };

@@ -108,75 +108,29 @@ function Actions({ dryRun }: { dryRun: boolean }) {
   );
 }
 
-const FIELD_ENV: Record<string, string> = {
-  host: "SMTP_HOST", port: "SMTP_PORT", user: "SMTP_USER", password: "SMTP_PASSWORD",
-  from_email: "SMTP_FROM", from_name: "SMTP_FROM_NAME", starttls: "SMTP_STARTTLS",
-};
-
-function SmtpForm({ saved }: { saved: SmtpSettings }) {
-  const qc = useQueryClient();
-  const [starttls, setStarttls] = useState(saved.starttls);
-  const save = useMutation({ mutationFn: api.saveSmtpSettings, onSuccess: (s) => qc.setQueryData(["smtp"], s) });
+/** Read-only: the mail server is set in the server's .env (SMTP_*). The test button checks it works. */
+function SmtpInfo({ s }: { s: SmtpSettings }) {
   const test = useMutation({ mutationFn: api.testSmtp });
-  const locked = (f: string) => saved.locked.includes(f);
-  const hint = (f: string) => locked(f) && <span className="text-xs text-slate-500">Set by {FIELD_ENV[f]} on the server</span>;
-
-  function submit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const f = new FormData(e.currentTarget);
-    const text = (k: string) => String(f.get(k) ?? "").trim();
-    save.mutate({
-      host: text("host"), port: Number(f.get("port")), user: text("user"), password: String(f.get("password") ?? ""),
-      from_email: text("from_email"), from_name: text("from_name"), starttls,
-    });
-  }
-
-  const field = (name: keyof SmtpSettings, label: string, props: Record<string, unknown> = {}) => (
-    <div className="grid gap-1">
-      <label htmlFor={`smtp-${name}`} className="font-medium">{label}</label>
-      <input id={`smtp-${name}`} name={name} disabled={locked(name)} defaultValue={String(saved[name] ?? "")} className={input} {...props} />
-      {hint(name)}
-    </div>
-  );
-
+  const rows: [string, string][] = [
+    ["Server", s.host ? `${s.host}:${s.port}${s.starttls ? " (STARTTLS)" : ""}` : "Not set"],
+    ["Username", s.user || "Not set"],
+    ["Password", s.password_set ? "Set" : "Not set"],
+    ["From", s.from_email ? `${s.from_name} <${s.from_email}>` : "Not set"],
+  ];
   return (
     <section className={`${card} mt-8 max-w-xl p-5`} aria-labelledby="smtp-h">
       <h2 id="smtp-h" className="font-semibold">Email server (SMTP)</h2>
-      <p className="mt-1 text-sm text-slate-500">The mail account the payment advice emails are sent from. Admins only.</p>
-      <form className="mt-4 grid gap-4" onSubmit={submit} onChange={() => { save.reset(); test.reset(); }}>
-        <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
-          {field("host", "Server", { placeholder: "smtp.gmail.com", autoComplete: "off" })}
-          {field("port", "Port", { type: "number", min: 1, max: 65535, required: true })}
-        </div>
-        {field("user", "Username", { autoComplete: "off" })}
-        <div className="grid gap-1">
-          <label htmlFor="smtp-password" className="font-medium">Password</label>
-          <input id="smtp-password" name="password" type="password" autoComplete="new-password" disabled={locked("password")} className={input}
-            placeholder={saved.password_set ? "Saved. Leave blank to keep it" : "App password or account password"} />
-          {hint("password")}
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          {field("from_email", "From address", { type: "email", placeholder: "payments@company.com" })}
-          {field("from_name", "From name")}
-        </div>
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={starttls} disabled={locked("starttls")} onChange={(e) => setStarttls(e.target.checked)} className="h-4 w-4" />
-          Use STARTTLS (port 587; turn off only if your provider says so)
-          {hint("starttls")}
-        </label>
-        <div className="flex flex-wrap items-center gap-3">
-          <button type="submit" className={btnPrimary} disabled={save.isPending}>{save.isPending ? "Saving…" : "Save email server"}</button>
-          <button type="button" className={btn} disabled={test.isPending || save.isPending} onClick={() => test.mutate()}
-            title="Sends a test email to you with the saved settings">
-            {test.isPending ? "Sending…" : "Send test email"}
-          </button>
-          <p role="status" className="text-sm text-emerald-700">
-            {save.isSuccess && "Saved."} {test.data && `Test email sent to ${test.data.sent_to}.`}
-          </p>
-        </div>
-        {save.isError && <ErrorBox error={save.error} />}
-        {test.isError && <ErrorBox error={test.error} />}
-      </form>
+      <p className="mt-1 text-sm text-slate-500">Set in the server's <code>.env</code> (<code>SMTP_*</code>); change it there and restart. Admins only.</p>
+      <dl className="mt-4 grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2 text-sm">
+        {rows.map(([k, v]) => <div key={k} className="contents"><dt className="font-medium">{k}</dt><dd className="break-all text-slate-700">{v}</dd></div>)}
+      </dl>
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button type="button" className={btn} disabled={test.isPending} onClick={() => test.mutate()} title="Sends a test email to you">
+          {test.isPending ? "Sending…" : "Send test email"}
+        </button>
+        <p role="status" className="text-sm text-emerald-700">{test.data && `Test email sent to ${test.data.sent_to}.`}</p>
+      </div>
+      {test.isError && <ErrorBox error={test.error} />}
     </section>
   );
 }
@@ -185,7 +139,7 @@ function EmailServer() {
   const q = useQuery({ queryKey: ["smtp"], queryFn: api.smtpSettings });
   if (q.isPending) return <Loading what="Loading email server settings" />;
   if (q.isError) return <div className="mt-8 max-w-xl"><ErrorBox error={q.error} /></div>;
-  return <SmtpForm saved={q.data} />;
+  return <SmtpInfo s={q.data} />;
 }
 
 /** The real template with made-up rows. SettingsForm refetches it on save, so a new signature shows. */

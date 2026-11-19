@@ -72,7 +72,7 @@ Secrets come only from the environment (`.env`, never committed). The settings p
 |---|---|---|
 | `POSTGRES_PASSWORD` | none (required in prod) | Letters and digits only: it goes into the database URL unescaped |
 | `DATABASE_URL` | `sqlite:///./dev.db` | Set by `docker-compose.prod.yml`; leave it alone there |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | empty, `587` | The company mail server. Optional: admins can set all SMTP values on the Settings page instead. A non-empty env var wins and locks that field on the page |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | empty, `587` | The company mail server. Set only here: the Settings page shows it read-only and has a "Send test email" button. Restart `app` after changing |
 | `SMTP_FROM`, `SMTP_FROM_NAME` | empty, company name | Sender address and display name |
 | `SMTP_STARTTLS` | `true` | |
 | `DRY_RUN` | `true` | Emails are rendered and logged but **not sent** unless this is `false` (or unset and the setting is off) |
@@ -104,7 +104,7 @@ All commands from the repo root; `dc` means `docker compose -f docker-compose.pr
 
 **A queue row stuck in `SENDING`.** The app died mid-send; the email may or may not have gone out. It is never resent automatically. Check the mailbox's Sent folder, then fix the row by hand in the database (`SENT` with `sent_at`, or back to `PENDING` to resend).
 
-**Emails not going out.** In order: `DRY_RUN` still on? Email server set (Settings page or SMTP variables)? `dc logs app | grep email_queue` for `FAILED` / `skipped` lines. Exceptions and Manual Review pages list invoices that will never be emailed until fixed.
+**Emails not going out.** In order: `DRY_RUN` still on? Email server set (`SMTP_*` variables; Settings → "Send test email" checks it)? `dc logs app | grep email_queue` for `FAILED` / `skipped` lines. Exceptions and Manual Review pages list invoices that will never be emailed until fixed.
 
 **Upload refused.** 413 = a request over the Nginx cap; 429 = more than 10 uploads a minute from one address, wait a minute; 422 = the reply lists each file's problem (wrong type, too big, password-protected, missing columns).
 

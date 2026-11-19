@@ -16,7 +16,6 @@ def now_ist() -> datetime:
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "20"))  # per uploaded file; deploy/nginx.conf caps the body to match
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
-# SMTP: env var (e.g. SMTP_HOST) first, else the Settings page (app_settings), else these defaults. See smtp().
 # When set, every email goes to this inbox instead of the vendor (testing only; the send still counts as SENT)
 TEST_RECIPIENT = os.environ.get("TEST_RECIPIENT", "").strip()
 
@@ -35,8 +34,7 @@ SETTINGS = {"dry_run": "true", "send_time": "10:00", "signature": "[Name, design
             "email_outro": "Please review and reply with any questions.",
             "email_closing": "Yours faithfully,",
             "email_company": "Sudhamayi Enterprises Pvt. Ltd."}
-# SMTP keys are stored the same way but read only through smtp(); smtp_password is never returned by the API
-# or written to audit_log. ponytail: stored in plain text in app_settings; set SMTP_PASSWORD in env to keep it out of the DB.
+# The mail server: env only (SMTP_HOST, ...), else these defaults. Read through smtp(); never stored in the database.
 SMTP_SETTINGS = {"smtp_host": "", "smtp_port": "587", "smtp_user": "", "smtp_password": "", "smtp_from": "",
                  "smtp_from_name": "Sudhamayi Enterprises Pvt. Ltd.", "smtp_starttls": "true"}
 
@@ -63,7 +61,7 @@ def get_setting(name: str) -> str:
 
 def smtp() -> dict:
     """The mail server settings in effect: host, port, user, password, from, from_name, starttls."""
-    v = {k.removeprefix("smtp_"): _stored(k, d) for k, d in SMTP_SETTINGS.items()}
+    v = {k.removeprefix("smtp_"): env_value(k) or d for k, d in SMTP_SETTINGS.items()}
     try:
         v["port"] = int(v["port"])
     except ValueError:
@@ -74,11 +72,10 @@ def smtp() -> dict:
 
 def set_setting(name: str, value: str) -> None:
     """Upsert the app_settings row and append to audit_log, in one commit. An env var of the same name still wins on read."""
-    if name not in SETTINGS and name not in SMTP_SETTINGS:
+    if name not in SETTINGS:
         raise KeyError(name)
     from app.models import AppSetting, AuditLog, SessionLocal
 
-    hide = (lambda v: "(hidden)" if v else v) if name == "smtp_password" else (lambda v: v)
     with SessionLocal() as db:
         row = db.get(AppSetting, name)
         old = row.value if row else None
@@ -86,5 +83,5 @@ def set_setting(name: str, value: str) -> None:
             row.value = value
         else:
             db.add(AppSetting(key=name, value=value))
-        db.add(AuditLog(what=f"setting:{name}", old_value=hide(old), new_value=hide(value)))
+        db.add(AuditLog(what=f"setting:{name}", old_value=old, new_value=value))
         db.commit()

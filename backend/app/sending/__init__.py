@@ -97,7 +97,7 @@ def run_due(session: Session, on: date | None = None) -> dict:
     on = on or today()
     dry = dry_run()
     if not dry and not smtp_ready():
-        raise NotConfigured("SMTP isn't set up (Settings → Email server: host and from address): refusing to send")
+        raise NotConfigured("SMTP isn't set up (SMTP_HOST and SMTP_FROM in .env): refusing to send")
     counts = {"sent": 0, "failed": 0, "dry_run": 0, "not_sent": 0}
     due = session.scalars(select(EmailQueue.id)
                           .where(EmailQueue.status == QueueStatus.PENDING, EmailQueue.send_on_date <= on)
@@ -124,7 +124,7 @@ def send_now(session: Session, queue_id: int) -> str | None:
     (sent, failed, dry_run, not_sent), or None if it was already sent or is being sent."""
     dry = dry_run()
     if not dry and not smtp_ready():
-        raise NotConfigured("SMTP isn't set up (Settings → Email server: host and from address): refusing to send")
+        raise NotConfigured("SMTP isn't set up (SMTP_HOST and SMTP_FROM in .env): refusing to send")
     claimed = session.execute(update(EmailQueue)
                               .where(EmailQueue.id == queue_id, EmailQueue.status.in_([QueueStatus.PENDING, QueueStatus.DRAFT]))
                               .values(status=QueueStatus.SENDING)).rowcount
