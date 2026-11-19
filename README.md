@@ -18,6 +18,7 @@ node dev.mjs
 ```
 
 Backend on http://localhost:8000 (reloads on change, env from `.env`), frontend on http://localhost:5173. Ctrl+C stops both.
+`node dev.mjs --fresh` starts from an empty database (deletes the SQLite dev database and the history Excel file first; you upload the vendors list again).
 
 ## Backend (dev, SQLite)
 
