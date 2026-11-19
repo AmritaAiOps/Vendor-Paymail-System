@@ -9,7 +9,7 @@ from app import config
 from app.auth import require_admin
 from app.contract import QueueStatus, ResultStatus
 from app.email_builder import render_email
-from app.models import ConsolidatedEntry, EmailItem, EmailQueue, ReconciliationResult, Vendor, get_db
+from app.models import ConsolidatedEntry, EmailItem, EmailQueue, ReconciliationResult, UploadBatch, Vendor, get_db
 from app.reports.results import latest_only
 from app.schemas import (EmailPreview, PendingMailOut, PendingSummaryOut, QueueItemOut, RunNowOut, ScheduledOut,
                          SendAllIn, SendAllOut)
@@ -63,8 +63,9 @@ def pending_summary(db: Session = Depends(get_db)):
     items = [PendingMailOut(id=eq.id, vendor_id=v.id, vendor_name=v.party_name, invoice_count=n, send_on_date=eq.send_on_date,
                             scheduled_at=at(eq.send_on_date), missing_utr_count=missing.get(v.id, 0))
              for eq, v, n in db.execute(q)]
+    no_bank = db.scalars(select(UploadBatch.id).where(UploadBatch.bank_file == "").order_by(UploadBatch.id.desc())).all()
     return PendingSummaryOut(total=len(items), missing_utr_mails=sum(1 for i in items if i.missing_utr_count),
-                             missing_utr_invoices=sum(missing.values()), items=items)
+                             missing_utr_invoices=sum(missing.values()), missing_bank_batches=len(no_bank), missing_bank_batch_id=no_bank[0] if no_bank else None, items=items)
 
 
 @router.post("/send-all-now", response_model=SendAllOut, dependencies=[Depends(require_admin)])

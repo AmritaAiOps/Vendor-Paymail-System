@@ -10,7 +10,7 @@ from msoffcrypto.format.ooxml import OOXMLFile
 from app.ingest import _parse, load_gdn_file
 from app.ingest.clean import (cfa_company_key, clean_str, loose_name_key, name_key, normalize_utr, parse_amount,
                               parse_date, split_emails)
-from app.models import ConsolidatedEntry, Vendor
+from app.models import BankTransaction, ConsolidatedEntry, ReconciliationResult, Vendor
 from app.reconcile import _Vendors
 from tests.fixtures import three_row_example as fx
 from tests.util import files_from, post_batch, xlsx
@@ -217,3 +217,23 @@ def test_gdn_totals_rows_are_skipped():
     raw = lambda v, inv: {"vendor_name": v, "invoice_no": inv, "voucher_no": "1", "gdn_date": None, "amount": "10", "reason": "r"}
     out = _parse_gdn([("APR", 2, raw("ACME", "A-1")), ("APR", 3, raw("Grand Total", None))], rep)
     assert [r["vendor_name"] for r in out] == ["ACME"] and rep["rows_skipped"] == 1
+
+
+def test_upload_without_bank_then_attach_and_reconcile(client, db):
+    files = upload_files()
+    bank = files.pop("bank")
+    r = post_batch(client, files)
+    assert r.status_code == 201, r.text
+    bid = r.json()["id"]
+    assert r.json()["bank_file"] == "" and db.query(BankTransaction).filter_by(batch_id=bid).count() == 0
+    assert client.get("/api/email-queue/pending-summary").json()["missing_bank_batch_id"] == bid  # drives the daily notice
+    assert client.post(f"/api/batches/{bid}/reconcile").status_code == 409  # no exceptions made up for a missing statement
+    assert db.query(ReconciliationResult).count() == 0
+
+    r = client.post(f"/api/batches/{bid}/bank", files={"bank": bank})
+    assert r.status_code == 200 and r.json()["files"]["bank"]["rows_kept"] == 3
+    assert client.get("/api/email-queue/pending-summary").json()["missing_bank_batches"] == 0
+    assert client.post(f"/api/batches/{bid}/bank", files={"bank": bank}).status_code == 409  # only once
+    assert client.post("/api/batches/999/bank", files={"bank": bank}).status_code == 404
+    assert client.post(f"/api/batches/{bid}/reconcile").status_code == 200
+    assert db.query(ReconciliationResult).count() == 3

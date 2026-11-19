@@ -208,6 +208,31 @@ function PendingMailsModal({ reason, initial, isAdmin, onKeep, onSignOut, onClos
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// Missing-bank-statement notification
+
+const BANK_DISMISSED = "bankNoticeDismissedOn";
+const today = () => new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD, local
+const bankSeen = () => { try { return localStorage.getItem(BANK_DISMISSED); } catch { return null; } };
+
+/** Banner while a batch still has no bank statement. Dismissing hides it for today only: it is back every day until the statement is added. */
+export function MissingBankNotice() {
+  const { data } = usePendingSummary();
+  const [seen, setSeen] = useState(bankSeen);
+  const n = data?.missing_bank_batches ?? 0;
+  if (n === 0 || seen === today()) return null;
+  const dismiss = () => { setSeen(today()); try { localStorage.setItem(BANK_DISMISSED, today()); } catch { /* storage blocked: it just comes back on reload */ } };
+  return (
+    <div role="status" className={`${card} mx-auto mt-3 flex max-w-[110rem] animate-fade-in flex-wrap items-center gap-x-3 gap-y-1 border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-950`}>
+      <span className="min-w-0 flex-1">
+        <b>The bank statement is missing for {plural(n, "run")}.</b> Please upload it: nothing can be reconciled or scheduled until you do.
+      </span>
+      <Link to="/upload" className={`${focusRing} rounded font-medium underline`}>Upload statement</Link>
+      <button type="button" aria-label="Dismiss until tomorrow" onClick={dismiss} className={`${focusRing} rounded px-1.5 text-amber-700 hover:text-amber-900`}>✕</button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // Missing-UTR notification
 
 const DISMISSED = "utrNoticeDismissed";

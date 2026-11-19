@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, downloadUrl, errorMessage, type QueueItemOut, type QueueStatus, type ResultFilters, type ResultOut, type ResultStatus } from "../api/client";
 import { EmailFrame } from "../components/EmailFrame";
-import { btn, btnPrimary, card, DownloadLink, Empty, ErrorBox, input, Loading, Modal, Pager, pageTitle, QUEUE_BADGE, RESULT_BADGE, Spinner, StatusBadge } from "../components/ui";
+import { Badge, btn, btnPrimary, card, DownloadLink, Empty, ErrorBox, input, Loading, Modal, Pager, pageTitle, QUEUE_BADGE, RESULT_BADGE, Spinner, StatusBadge } from "../components/ui";
 import { useMe } from "../lib/useAuth";
 import { formatDate, formatDateTime, formatMoney } from "../lib/format";
 
@@ -73,6 +73,26 @@ function SendDue({ dryRun }: { dryRun: boolean }) {
   );
 }
 
+/** Edits a vendor's address(es). Several go in one box, separated by commas. The server validates and re-queues held payments. */
+function EditEmail({ vendorId, current, onDone }: { vendorId: number; current: string; onDone: () => void }) {
+  const [email, setEmail] = useState(current);
+  const qc = useQueryClient();
+  const save = useMutation({
+    mutationFn: () => api.setVendorEmail(vendorId, email.trim()),
+    onSuccess: () => { qc.invalidateQueries(); onDone(); },
+  });
+  return (
+    <form className="flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white px-3 py-2" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+      <input type="text" autoFocus required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@vendor.com, accounts@vendor.com"
+        aria-label="Email addresses, separated by commas" className={`${input} min-w-64 flex-1 py-1.5`} />
+      <button className={`${btnPrimary} py-1.5`} disabled={save.isPending || !email.trim()}>{save.isPending ? <Spinner /> : "Save"}</button>
+      <button type="button" className={`${btn} py-1.5`} onClick={onDone}>Cancel</button>
+      <span className="w-full text-xs text-slate-500">To add another address, type a comma after the last one. Applies to every email for this vendor, including ones already queued.</span>
+      {save.isError && <span role="alert" className="w-full text-xs text-rose-700">{errorMessage(save.error)}</span>}
+    </form>
+  );
+}
+
 const PAGE = 10; // vendors per page
 const FETCH = 500; // the results endpoint's max page size
 
@@ -107,6 +127,9 @@ export default function VendorEmails() {
   const [dateTo, setDateTo] = useState("");
   const [offset, setOffset] = useState(0);
   const [open, setOpen] = useState<QueueItemOut | null>(null);
+  const [editing, setEditing] = useState<string | null>(null); // group key whose email form is open
+  const vendorList = useQuery({ queryKey: ["vendor-list", "vendors"], queryFn: api.vendorList });
+  const emailOf = new Map((vendorList.data?.vendors ?? []).map((v) => [v.id, v.email ?? ""]));
   const filters: ResultFilters = { status: status || undefined, vendor, q: search, date_from: dateFrom, date_to: dateTo };
   const results = useQuery({ queryKey: ["results", filters], queryFn: () => fetchAll(filters) });
   const queue = useQuery({ queryKey: ["queue", queueStatus, undefined], queryFn: () => api.emailQueue({ status: queueStatus || undefined }) });
@@ -180,23 +203,39 @@ export default function VendorEmails() {
       {ready && (groups.length === 0 ? <div className="mt-4"><Empty>{filtered ? "No vendors match these filters." : <>No results yet. <Link to="/upload" className="font-medium text-indigo-600 underline-offset-2 hover:underline">Upload files</Link> to get started.</>}</Empty></div> : (
         <>
           <div className="mt-4 space-y-3">
-            {groups.slice(offset, offset + PAGE).map((g) => (
-              <article key={g.key} className={`${card} animate-fade-up overflow-hidden`} aria-label={g.vendor}>
-                <header className="flex flex-wrap items-center justify-between gap-2 bg-slate-100 px-3 py-2">
+            {groups.slice(offset, offset + PAGE).map((g) => {
+              // wrong = held as INVALID_EMAIL, no address on file, or the send failed
+              const vendorId = g.email?.vendor_id ?? g.rows.find((r) => r.vendor_id)?.vendor_id ?? null;
+              const wrong = g.rows.some((r) => r.exception_type === "INVALID_EMAIL") || (!!g.email && !g.email.to_email) || g.email?.status === "FAILED";
+              return (
+              <article key={g.key} className={`${card} animate-fade-up overflow-hidden ${wrong ? "ring-2 ring-rose-300" : ""}`} aria-label={g.vendor}>
+                <header className={`flex flex-wrap items-center justify-between gap-2 px-3 py-2 ${wrong ? "bg-rose-50" : "bg-slate-100"}`}>
                   <div>
                     <h2 className="font-display text-sm font-semibold text-slate-900">{g.vendor}</h2>
                     <p className="text-xs text-slate-500">
-                      {g.email ? <>To {g.email.to_email ?? "no email address"} · send on {formatDate(g.email.send_on_date)}{g.email.sent_at && <> · sent {formatDateTime(g.email.sent_at)}</>}</> : "No email queued"}
+                      {g.email ? <>To {g.email.to_email ?? "no email address"} · send on {formatDate(g.email.send_on_date)}{g.email.sent_at && <> · sent {formatDateTime(g.email.sent_at)}</>}</>
+                        : <>No email queued{vendorId !== null && <> · address on file: {emailOf.get(vendorId) || "none"}</>}</>}
                     </p>
                   </div>
-                  {g.email && (
-                    <div className="flex items-center gap-3">
-                      <StatusBadge map={QUEUE_BADGE} value={g.email.status} />
-                      {isAdmin && (g.email.status === "PENDING" || g.email.status === "DRAFT") && <SendNow item={g.email} dryRun={settings.data?.dry_run ?? true} />}
-                      <button className={btn} onClick={() => setOpen(g.email)}>Preview<span className="sr-only"> email to {g.vendor}</span></button>
-                    </div>
-                  )}
+                  <div className="flex flex-wrap items-center gap-3">
+                    {wrong && <Badge label="Wrong email" tone="red" />}
+                    {vendorId !== null && (
+                      <button className={wrong ? btnPrimary : btn} onClick={() => setEditing(editing === g.key ? null : g.key)}>
+                        {wrong ? "Fix email" : "Edit email"}<span className="sr-only"> for {g.vendor}</span>
+                      </button>
+                    )}
+                    {g.email && (
+                      <>
+                        <StatusBadge map={QUEUE_BADGE} value={g.email.status} />
+                        {isAdmin && (g.email.status === "PENDING" || g.email.status === "DRAFT") && <SendNow item={g.email} dryRun={settings.data?.dry_run ?? true} />}
+                        <button className={btn} onClick={() => setOpen(g.email)}>Preview<span className="sr-only"> email to {g.vendor}</span></button>
+                      </>
+                    )}
+                  </div>
                 </header>
+                {editing === g.key && vendorId !== null && (
+                  <EditEmail key={vendorList.dataUpdatedAt} vendorId={vendorId} current={emailOf.get(vendorId) ?? g.email?.to_email ?? ""} onDone={() => setEditing(null)} />
+                )}
                 <table className="w-full table-fixed border-collapse text-sm">
                   <caption className="sr-only">Invoices for {g.vendor}</caption>
                   <thead><tr>
@@ -217,7 +256,8 @@ export default function VendorEmails() {
                   </tbody>
                 </table>
               </article>
-            ))}
+              );
+            })}
           </div>
           <Pager offset={offset} limit={PAGE} total={groups.length} onChange={setOffset} />
         </>

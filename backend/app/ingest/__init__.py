@@ -20,7 +20,7 @@ from app.models import BankTransaction, ConsolidatedEntry, GdnRecord, TdsRecord,
 
 FILE_KINDS = ("consolidated", "bank", "gdn", "tds", "vendors")  # every layout the app can read (detect, samples)
 BATCH_KINDS = FILE_KINDS[:4]  # uploaded for every run. The vendors list is not: it is stored once (app.vendor_list)
-_NEFT = re.compile(r"^NEFT DR-[A-Z0-9]+-(.+)-([A-Z]{4}0[A-Z0-9]{6})-")  # NEFT DR-<utr>-<name>-<ifsc>-...
+_NEFT = re.compile(r"^NEFT DR-([A-Z0-9]+)-(.+)-([A-Z]{4}0[A-Z0-9]{6})-")  # NEFT DR-<utr>-<name>-<ifsc>-...
 
 
 class FileError(ValueError):
@@ -176,19 +176,27 @@ def _parse_bank(rows: list, report: dict) -> list[dict]:
     """Debit rows only. A credit whose description says RETURN (e.g. "NEFT RETURN-PAYMENT STOPPED-<name>-<utr>")
     marks the debit with that UTR as bounced."""
     out, returns = [], []
+    if rows and not {"debit", "flag"} & rows[0][2].keys():  # neither Credit/Debit layout nor Amount + C/D flag
+        raise FileError([{"file": "bank", "message": f"missing column(s) {_label('bank', 'debit')}"}])
     for sheet, n, raw in _each_row("bank", rows, report):
         f = lambda field, parse=clean_str, required=False: _field("bank", raw, field, parse, required)
         try:
             debit, description = f("debit", parse_amount), f("description")
+            if debit is None and f("flag") == "D":  # new layout: amount + C/D flag
+                debit = f("amount", parse_amount)
             if not debit or debit < 0:  # credit rows: money coming in
                 report["rows_skipped"] += 1
                 if "RETURN" in (description or "").upper():
                     returns.append((sheet, n, description))
                 continue
             neft = _NEFT.match(description or "")
-            out.append({"value_date": f("value_date", parse_date, True), "utr": f("utr", normalize_utr, True),
+            utr = f("utr", normalize_utr) or (neft[1] if neft else None)
+            if utr is None:  # a debit with no UTR (salary, charges, RTGS): not a vendor payment
+                report["rows_skipped"] += 1
+                continue
+            out.append({"value_date": f("value_date", parse_date, True), "utr": utr,
                         "debit": debit, "description": description,
-                        "vendor_name": neft[1].strip() if neft else None, "ifsc": neft[2] if neft else None,
+                        "vendor_name": neft[2].strip() if neft else None, "ifsc": neft[3] if neft else None,
                         "is_bounced": False, "bounce_note": None})
         except ValueError as e:
             _issue(report, sheet, n, str(e))
@@ -213,7 +221,8 @@ def _parse_gdn(rows: list, report: dict) -> list[dict]:
                 continue
             out.append({"vendor_name": f("vendor_name", required=True), "invoice_no": f("invoice_no"),
                         "voucher_no": f("voucher_no"), "gdn_date": f("gdn_date", parse_date),
-                        "amount": f("amount", parse_amount), "reason": f("reason"), "pan": f("pan", parse_pan)})
+                        "amount": f("amount", parse_amount), "reason": (f("cn_no") or "CN Pending") if "cn_no" in raw else f("reason"),
+                        "pan": f("pan", parse_pan)})
         except ValueError as e:
             _issue(report, sheet, n, str(e))
     return out
@@ -306,12 +315,13 @@ class NoVendorList(Exception):
 def rows_sha256(parsed: dict[str, list[dict]], vendor_list_version: int = 0) -> str:
     """Fingerprint of the parsed rows, not the file bytes: re-saving the same workbook changes its bytes, not its rows.
     It includes the vendors list version: the same four files against a changed list can give different results."""
-    rows = [parsed[k] for k in BATCH_KINDS] + [vendor_list_version]
+    rows = [parsed.get(k, []) for k in BATCH_KINDS] + [vendor_list_version]  # no bank statement yet = []
     return hashlib.sha256(json.dumps(rows, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def ingest_batch(db: Session, files: dict[str, tuple[str, bytes]]) -> UploadBatch:
-    """files = {kind: (file name, bytes)} for the four BATCH_KINDS. Raises NoVendorList if no vendors list is stored, and
+    """files = {kind: (file name, bytes)} for the BATCH_KINDS; "bank" may be left out (statement not received yet: attach
+    it later with attach_bank, until then the batch can't be reconciled). Raises NoVendorList if no vendors list is stored, and
     DuplicateUpload if the same files were uploaded before against the same list version (same rows). Parses everything
     first; if any file is unusable, raises FileError listing every problem and stores nothing. Otherwise stores the batch
     and its rows, commits. The vendors list is never read from the files: matching uses the stored list."""
@@ -321,7 +331,7 @@ def ingest_batch(db: Session, files: dict[str, tuple[str, bytes]]) -> UploadBatc
     if state is None:
         raise NoVendorList()
     parsed, reports, problems = {}, {}, []
-    for kind in BATCH_KINDS:
+    for kind in files:
         name, data = files[kind]
         try:
             parsed[kind], reports[kind] = _parse(kind, data, name)
@@ -334,12 +344,30 @@ def ingest_batch(db: Session, files: dict[str, tuple[str, bytes]]) -> UploadBatc
         raise DuplicateUpload(earlier)
 
     batch = UploadBatch(status=BatchStatus.UPLOADED, ingest_report=reports, files_sha256=digest,
-                        vendors_file=state.file_name, **{f"{kind}_file": files[kind][0][:255] for kind in BATCH_KINDS})
+                        vendors_file=state.file_name, **{f"{kind}_file": files[kind][0][:255] if kind in files else "" for kind in BATCH_KINDS})
     db.add(batch)
     db.flush()
     for model, kind in ((ConsolidatedEntry, "consolidated"), (BankTransaction, "bank"),
                         (GdnRecord, "gdn"), (TdsRecord, "tds")):
-        db.execute(insert(model), [{**r, "batch_id": batch.id} for r in parsed[kind]])
+        if kind in parsed:
+                db.execute(insert(model), [{**r, "batch_id": batch.id} for r in parsed[kind]])
+    db.commit()
+    return batch
+
+
+def attach_bank(db: Session, batch_id: int, name: str, data: bytes) -> UploadBatch:
+    """Add the bank statement to a batch uploaded without one. LookupError if there is no such batch, ValueError if it
+    already has one, FileError if the file is unusable (nothing stored). The duplicate-upload fingerprint is left as it
+    was (rows of the first four files only): ponytail: re-uploading all four files plus the statement makes a new batch."""
+    batch = db.get(UploadBatch, batch_id)
+    if batch is None:
+        raise LookupError(batch_id)
+    if batch.bank_file:
+        raise ValueError("this batch already has a bank statement")
+    rows, report = _parse("bank", data, name)
+    db.execute(insert(BankTransaction), [{**r, "batch_id": batch_id} for r in rows])
+    batch.bank_file = name[:255]
+    batch.ingest_report = {**(batch.ingest_report or {}), "bank": report}
     db.commit()
     return batch
 

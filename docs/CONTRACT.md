@@ -77,7 +77,7 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 |---|---|---|---|---|
 | GET | /api/health | A | none | HealthOut |
 | GET | /api/auth/me | A | none | MeOut |
-| POST | /api/batches | A | multipart files: consolidated, bank, gdn, tds (the vendors list is **not** uploaded per run, it is the stored list; .xlsx/.xls, ≤ `MAX_UPLOAD_MB` each, default 20); optional form fields `<field>_password` (e.g. `bank_password`) for password-protected files, decrypted in memory, never stored | 201 BatchOut; 422 `detail: [{file, message}]` listing every problem, nothing stored (a protected file with no or a wrong password adds `password_required: true`); 409 if a batch with exactly the same parsed rows exists against the same vendors list version (message names it), nothing stored; 409 if no vendors list is stored yet |
+| POST | /api/batches | A | multipart files: consolidated, gdn, tds, and bank (optional: leave it out if the statement has not arrived, reconcile then returns 409 until POST /api/batches/{id}/bank) (the vendors list is **not** uploaded per run, it is the stored list; .xlsx/.xls, ≤ `MAX_UPLOAD_MB` each, default 20); optional form fields `<field>_password` (e.g. `bank_password`) for password-protected files, decrypted in memory, never stored | 201 BatchOut; 422 `detail: [{file, message}]` listing every problem, nothing stored (a protected file with no or a wrong password adds `password_required: true`); 409 if a batch with exactly the same parsed rows exists against the same vendors list version (message names it), nothing stored; 409 if no vendors list is stored yet |
 | POST | /api/batches/detect | A | multipart `files` (up to 5) | {file name: kind or null}, kind = consolidated, bank, gdn, tds or vendors, by column headers; null = can't tell; nothing stored |
 | GET | /api/vendor-list | A | none | VendorListStatus; `exists: false` (version 0) until the first list is uploaded: runs are blocked until then |
 | GET | /api/vendor-list/vendors | A | none | VendorListOut: the stored list for the edit table, with the `version` to send back |
@@ -87,6 +87,7 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | GET | /api/vendor-list/history | A | query: limit (default 100) | list[VendorHistoryOut], newest first: version, when, who, action (UPLOAD, EDIT, EMAIL_FIX), counts |
 | GET | /api/batches/sample/{kind}.xlsx | A | none | the expected layout of one upload file: the real headers and one made-up row; 404 for an unknown kind |
 | GET | /api/batches/{id}/summary | A | none | BatchSummary |
+| POST | /api/batches/{id}/bank | A | multipart `bank` (+ optional `bank_password`) | BatchSummary; adds the bank statement to a batch uploaded without one, then call reconcile; 409 if it already has one, 422 like upload, 404 if no batch |
 | POST | /api/batches/{id}/reconcile | A | none | BatchSummary; re-runnable (results already queued for email are left alone); ends by calling `build_queue(session, batch_id=id)`; 404 if no batch |
 | GET | /api/batches/{id}/results | A | query: status? (ResultStatus), vendor? (part of name, any case), limit (1–500, default 100), offset | list[ResultOut] in consolidated-report order; total before paging in header `X-Total-Count`; 404 if no batch |
 | POST | /api/scheduler/run-now | A | none | RunNowOut (counts of this run); 503 if real sending is on but SMTP isn't configured, nothing touched. (admin) |
@@ -94,7 +95,7 @@ Request and response names are models in `backend/app/schemas.py`. `xlsx` = an E
 | GET | /api/batches/{id}/report.xlsx | B | none | xlsx |
 | GET | /api/email-queue | B | query: batch_id?, status? (QueueStatus) | list[QueueItemOut] |
 | POST | /api/email-queue/schedule | B | query: batch_id? | `{scheduled}`: Send all. Every `DRAFT` email (only the batch's, if batch_id) becomes `PENDING`, so the daily job sends it on its T+2 date; one already past its date goes on the next run (admin) |
-| GET | /api/email-queue/pending-summary | B | none | PendingSummaryOut: the scheduled (PENDING) emails not yet sent, each with its send date and time (IST) and `missing_utr_count`, plus the total number of invoices with no UTR (the missing-UTR notification) |
+| GET | /api/email-queue/pending-summary | B | none | PendingSummaryOut: the scheduled (PENDING) emails not yet sent, each with its send date and time (IST) and `missing_utr_count`, plus the total number of invoices with no UTR (the missing-UTR notification) and `missing_bank_batches`, the batches uploaded without a bank statement (the daily "upload the statement" notice) |
 | POST | /api/email-queue/send-all-now | B | SendAllIn `{ids, include_missing_utr}` | SendAllOut: sends those scheduled emails at once, ignoring their T+2 dates (admin); an email whose vendor has invoices with no UTR is held, and stays scheduled, unless `include_missing_utr`; 503 as send-now |
 | POST | /api/email-queue/{id}/send-now | B | none | RunNowOut for that one email: sends it at once, ignoring its T+2 date (admin); 409 if already sent or being sent; 503 if SMTP isn't set up |
 | GET | /api/email-queue/{id}/preview | B | none | EmailPreview |

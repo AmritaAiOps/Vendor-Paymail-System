@@ -16,10 +16,12 @@ COLUMNS = {
         "transaction_date": ["Transaction Date"],
     },
     "bank": {
-        "value_date": ["Value Date"],
-        "utr": ["Ref / Cheque No", "Ref No", "UTR"],
+        "value_date": ["Value Date", "ValueDate"],
+        "utr": ["Ref / Cheque No", "Ref No", "UTR"],  # optional: the new layout has none, the UTR is read from the description
         "debit": ["Debit"],
         "description": ["Description"],
+        "amount": ["AmountInAccountCurrency"],  # new layout: one amount column + a C/D flag instead of Credit/Debit
+        "flag": ["CreditDebitFlag"],
     },
     "gdn": {
         "gdn_date": ["Date"],
@@ -27,7 +29,8 @@ COLUMNS = {
         "voucher_no": ["Voucher No."],
         "invoice_no": ["Voucher Ref. No."],
         "amount": ["Gross Total"],
-        "reason": ["Narration"],
+        "reason": ["Narration"],  # used only when the file has no CN No column
+        "cn_no": ["CN No", "CN No."],  # optional: when present it is the reason, or "CN Pending" if blank
         "pan": ["GSTIN/UIN"],  # optional; stored as the PAN inside it
     },
     "tds": {
@@ -47,7 +50,7 @@ COLUMNS = {
 
 REQUIRED = {
     "consolidated": ["vendor_name", "utr", "invoice_no", "invoice_amount", "cheque_amount", "transaction_date"],
-    "bank": ["value_date", "utr", "debit", "description"],
+    "bank": ["value_date", "description"],
     "gdn": ["vendor_name", "invoice_no", "amount", "reason"],
     "tds": ["vendor_name", "invoice_no", "tds_amount"],
     "vendors": ["party_name", "email"],

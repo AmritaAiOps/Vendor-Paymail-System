@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ApiError, UPLOAD_FIELDS, api, downloadUrl, errorMessage, type DetectedKind, type FileReport, type UploadField } from "../api/client";
-import { DownloadLink, Empty, ErrorBox, Loading, Spinner, btn, btnPrimary, card, focusRing, num, pageTitle, sectionTitle, td, th } from "../components/ui";
+import { DownloadLink, Empty, ErrorBox, Loading, Spinner, btn, btnPrimary, card, focusRing, groupIssues, num, pageTitle, sectionTitle, td, th } from "../components/ui";
 import { VendorListCard, useVendorListStatus } from "../components/VendorListCard";
+import { usePendingSummary } from "../components/ExitGuard";
 import { setLastBatch } from "../lib/lastBatch";
 
 const ZONES: { field: UploadField; label: string }[] = [
@@ -80,7 +81,7 @@ const FILE_LABEL: Record<string, string> = Object.fromEntries(ZONES.map((z) => [
 const VENDORS_HINT = "The vendors list is stored, not uploaded per run: use Re-upload on the Vendors list card above.";
 
 function FileSummary({ name, report }: { name: string; report: FileReport }) {
-  const shown = report.issues.slice(0, 50);
+  const groups = groupIssues(report.issues), shown = groups.slice(0, 50);
   return (
     <section className={`${card} animate-fade-up p-4`}>
       <h3 className="flex flex-wrap items-center gap-2 font-semibold">
@@ -97,22 +98,25 @@ function FileSummary({ name, report }: { name: string; report: FileReport }) {
       </dl>
       {report.issues.length > 0 && (
         <details className="mt-3 text-sm">
-          <summary className={`cursor-pointer ${focusRing}`}>{report.issues.length} row issue{report.issues.length > 1 ? "s" : ""}</summary>
+          <summary className={`cursor-pointer ${focusRing}`}><b className={report.rows_rejected > 0 ? "text-rose-800" : "text-amber-800"}>{report.issues.length} row issue{report.issues.length > 1 ? "s" : ""}</b>{groups.length < report.issues.length && ` (${groups.length} different)`}</summary>
           <table className="mt-2 w-full border-collapse overflow-hidden rounded-xl text-sm ring-1 ring-slate-200">
-            <thead><tr><th className={th}>Sheet</th><th className={`${th} ${num}`}>Row</th><th className={th}>Outcome</th><th className={th}>Message</th></tr></thead>
+            <thead><tr><th className={th}>Outcome</th><th className={th}>Message</th><th className={`${th} ${num}`}>Times</th><th className={th}>Where</th></tr></thead>
             <tbody>
               {shown.map((i, n) => (
-                <tr key={n}><td className={td}>{i.sheet}</td><td className={`${td} ${num}`}>{i.row}</td>
-                  <td className={td}>{i.rejected ? "Rejected" : "Kept, check"}</td><td className={td}>{i.message}</td></tr>
+                <tr key={n}><td className={`${td} font-bold ${i.rejected ? "text-rose-800" : "text-amber-800"}`}>{i.rejected ? "Rejected" : "Kept, check"}</td>
+                  <td className={`${td} font-semibold text-slate-900`}>{i.message}</td><td className={`${td} ${num}`}>{i.count}</td>
+                  <td className={td}>{i.where.join(", ")}{i.count > i.where.length && ", …"}</td></tr>
               ))}
             </tbody>
           </table>
-          {report.issues.length > shown.length && <p className="mt-1 text-slate-500">…and {report.issues.length - shown.length} more.</p>}
+          {groups.length > shown.length && <p className="mt-1 text-slate-500">…and {groups.length - shown.length} more.</p>}
         </details>
       )}
     </section>
   );
 }
+
+const PENDING = "pendingBatchId";
 
 export default function Upload() {
   const navigate = useNavigate();
@@ -124,7 +128,7 @@ export default function Upload() {
   const [passwords, setPasswords] = useState<Partial<Record<UploadField, string>>>({});
 
   const pick = (field: UploadField, f: File | undefined) => {
-    up.reset(); // a changed file set is a new batch; the old one stays on the server unreconciled
+    up.reset(); setPending(null); // a changed file set is a new batch; the old one stays on the server unreconciled
     const problem = f ? check(f) : null;
     setErrors((e) => ({ ...e, [field]: problem ?? undefined }));
     setFiles((s) => ({ ...s, [field]: f && !problem ? f : undefined }));
@@ -148,32 +152,53 @@ export default function Upload() {
       unknown.length ? `Couldn't tell which card these belong to, add them to their card: ${unknown.join(", ")}` : "",
     ].filter(Boolean).join(" "));
   };
+  const waiting = usePendingSummary();
   const vendors = useVendorListStatus();
   const noList = vendors.data?.exists === false; // first-time setup: no run until a vendors list is stored
-  const ready = UPLOAD_FIELDS.every((f) => files[f]) && vendors.data?.exists === true;
+  const ready = UPLOAD_FIELDS.every((f) => f === "bank" || files[f]) && vendors.data?.exists === true; // bank statement is optional: it can arrive later
   const qc = useQueryClient();
 
+  // The uploaded-but-not-reconciled batch survives a tab switch (this page unmounts): kept in sessionStorage until reconciled or reset
+  const [pending, setPendingState] = useState<number | null>(() => { try { return Number(sessionStorage.getItem(PENDING)) || null; } catch { return null; } });
+  const setPending = (id: number | null) => {
+    setPendingState(id);
+    try { id === null ? sessionStorage.removeItem(PENDING) : sessionStorage.setItem(PENDING, String(id)); } catch { /* no storage: just don't remember */ }
+  };
+  const here = useRef(true); // false once the user left this page, so a finishing run doesn't yank them back
+  useEffect(() => { here.current = true; return () => { here.current = false; }; }, []);
+
   const up = useMutation({
-    mutationFn: () => api.uploadBatch(files as Record<UploadField, File>, passwords, setProgress),
+    mutationFn: () => api.uploadBatch(files, passwords, setProgress),
     onMutate: () => setProgress(0),
-    onSuccess: (b) => setLastBatch(b.id),
+    onSuccess: (b) => { setLastBatch(b.id); setPending(b.id); },
     onError: (err) => {
       if (!(err instanceof ApiError) || !Array.isArray(err.detail)) return;
       const need = err.detail.filter((d) => d.password_required).map((d) => [d.file, true]);
       if (need.length) setLocked((l) => ({ ...l, ...Object.fromEntries(need) }));
     },
   });
-  const batchId = up.data?.id;
+  const waitingId = waiting.data?.missing_bank_batch_id ?? null;
+  const [skip, setSkip] = useState<number | null>(null); // Reset puts the waiting batch aside until the page is reloaded
+  const batchId = up.data?.id ?? pending ?? (waitingId !== skip ? waitingId : null) ?? undefined; // a batch still lacking its statement stays open across days
   const summary = useQuery({ queryKey: ["summary", batchId], queryFn: () => api.batchSummary(batchId!), enabled: batchId !== undefined });
   const run = useMutation({
     mutationFn: () => api.reconcile(batchId!),
     // Reconciling changes every list (results, queue, exceptions, review), so drop all cached data
-    onSuccess: () => qc.invalidateQueries().then(() => navigate("/results")),
+    onSuccess: () => { setPending(null); return qc.invalidateQueries().then(() => here.current && navigate("/results")); },
   });
+
+  // Batch uploaded without the bank statement: it is added here once it arrives, then the run can start
+  const [lateBank, setLateBank] = useState<File>();
+  const [latePw, setLatePw] = useState("");
+  const addBank = useMutation({
+    mutationFn: () => api.addBank(batchId!, lateBank!, latePw || undefined),
+    onSuccess: () => { setLateBank(undefined); setLatePw(""); return qc.invalidateQueries(); },
+  });
+  const needsBank = summary.data !== undefined && !summary.data.batch.bank_file;
 
   const [round, setRound] = useState(0); // remounts the file inputs so Reset really empties them
   const reset = () => {
-    setFiles({}); setErrors({}); setLocked({}); setPasswords({}); setProgress(null); up.reset(); run.reset(); setRound((r) => r + 1);
+    setFiles({}); setErrors({}); setLocked({}); setPasswords({}); setProgress(null); setPending(null); setSkip(waitingId); up.reset(); run.reset(); addBank.reset(); setLateBank(undefined); setLatePw(""); setRound((r) => r + 1);
   };
   // 409 from the server: the same rows were uploaded before; its message names that batch
   const duplicateOf = up.error instanceof ApiError && up.error.status === 409 ? /batch (\d+)/.exec(errorMessage(up.error))?.[1] : undefined;
@@ -184,7 +209,7 @@ export default function Upload() {
   return (
     <section>
       <h1 className={pageTitle}>Upload</h1>
-      <p className="mt-1 text-slate-500">Add the four Excel files for one reconciliation run. The vendors list below is stored and used automatically.</p>
+      <p className="mt-1 text-slate-500">Add the Excel files for one reconciliation run (the bank statement can follow if it has not arrived). The vendors list below is stored and used automatically.</p>
 
       <ol className="mt-6 flex flex-wrap items-center gap-2 text-sm" aria-label="Steps">
         {["Add files", "Check the files", "Reconcile"].map((label, i) => (
@@ -250,14 +275,14 @@ export default function Upload() {
             ) : (
               <p className={`text-sm ${noList ? "text-amber-800" : "text-slate-500"}`}>
                 {noList ? "Upload the vendors list first. A run can't start without it."
-                  : ready ? "All set. Upload to check the files." : "Choose all four files to continue."}
+                  : ready ? "All set. Upload to check the files." : "Choose the consolidated, GDN and TDS files (the bank statement can be added later)."}
               </p>
             )}
             <div className="flex gap-2">
               <button type="submit" className={`${btnPrimary} flex-1 py-2.5`} disabled={!ready || up.isPending || up.isSuccess}>
                 {up.isPending ? <><Spinner />Uploading…</> : up.isSuccess ? "Uploaded ✓" : "Upload files"}
               </button>
-              <button type="button" className={`${btn} py-2.5`} onClick={reset} disabled={up.isPending || run.isPending || (readyCount === 0 && !up.isSuccess && !up.isError)}
+              <button type="button" className={`${btn} py-2.5`} onClick={reset} disabled={up.isPending || run.isPending || (readyCount === 0 && !up.isSuccess && !up.isError && batchId === undefined)}
                 title="Clear the chosen files and start a new upload">
                 Reset
               </button>
@@ -281,8 +306,26 @@ export default function Upload() {
           {summary.data && (Object.keys(summary.data.files).length === 0
             ? <Empty>No file report was returned.</Empty>
             : <div className="mt-3 grid gap-3 lg:grid-cols-2">{ZONES.map((z) => summary.data.files[z.field] && <FileSummary key={z.field} name={z.field} report={summary.data.files[z.field]} />)}</div>)}
+          {needsBank && (
+            <div className={`${card} mt-4 p-4`}>
+              <p className="font-semibold text-slate-900">Bank statement not added yet</p>
+              <p className="text-sm text-slate-500">Reconciliation needs it for the payment dates and amounts paid. Add it when it arrives; nothing is sent until then.</p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <input type="file" accept=".xlsx,.xls" aria-label="Bank statement"
+                  onChange={(e) => { addBank.reset(); setLateBank(e.target.files?.[0]); }} />
+                {addBank.isError && addBank.error instanceof ApiError && Array.isArray(addBank.error.detail) && addBank.error.detail.some((d) => d.password_required) && (
+                  <input type="password" autoComplete="off" aria-label="Bank statement password" placeholder="File password" value={latePw}
+                    onChange={(e) => setLatePw(e.target.value)} className={`rounded-lg border border-slate-300 px-3 py-2 text-sm ${focusRing}`} />
+                )}
+                <button type="button" className={btn} disabled={!lateBank || addBank.isPending} onClick={() => addBank.mutate()}>
+                  {addBank.isPending ? <><Spinner />Adding…</> : "Add bank statement"}
+                </button>
+              </div>
+              {addBank.isError && <div className="mt-2"><ErrorBox error={addBank.error} /></div>}
+            </div>
+          )}
           <div className="mt-6 flex items-center gap-3">
-            <button className={`${btnPrimary} px-5 py-2.5`} onClick={() => run.mutate()} disabled={run.isPending || summary.isPending}>
+            <button className={`${btnPrimary} px-5 py-2.5`} onClick={() => run.mutate()} disabled={run.isPending || summary.isPending || needsBank}>
               {run.isPending ? <><Spinner />Reconciling…</> : "Run reconciliation →"}
             </button>
             {run.isError && <span role="alert" className="text-sm text-rose-700">{errorMessage(run.error)}</span>}

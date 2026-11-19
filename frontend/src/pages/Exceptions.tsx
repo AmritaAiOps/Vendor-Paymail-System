@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, downloadUrl, errorMessage, type ExceptionType, type ResultOut } from "../api/client";
 import { ResultsTable, matchesQuery } from "../components/ResultsTable";
-import { btn, btnPrimary, card, DownloadLink, Empty, ErrorBox, input, Loading, pageTitle, sectionTitle, Spinner } from "../components/ui";
+import { Alert, btn, btnPrimary, card, DownloadLink, Empty, ErrorBox, input, Loading, pageTitle, sectionTitle, Spinner } from "../components/ui";
 
 // Order and wording of the groups. BOUNCED is highlighted wherever it appears, with the text label as well as colour.
 const GROUPS: { type: ExceptionType; title: string; hint: string }[] = [
@@ -37,6 +37,11 @@ export default function Exceptions() {
   const q = useQuery({ queryKey: ["exceptions"], queryFn: api.exceptions });
   const rows = (q.data ?? []).filter((r) => matchesQuery(r, find));
   const byType = (t: string) => rows.filter((r) => r.exception_type === t);
+  // payments and distinct vendors, so one vendor with many invoices is one alert, not many
+  const vendorsIn = (t: string) => {
+    const r = byType(t), v = new Set(r.map((x) => x.vendor_id ?? x.vendor_name)).size;
+    return `${v} vendor${v === 1 ? "" : "s"}, ${r.length} payment${r.length === 1 ? "" : "s"}`;
+  };
   const known = new Set<string>(GROUPS.map((g) => g.type));
   const other = rows.filter((r: ResultOut) => !known.has(r.exception_type ?? ""));
 
@@ -59,7 +64,7 @@ export default function Exceptions() {
           {GROUPS.map((g) => byType(g.type).length > 0 && (
             <section key={g.type} className={`mt-6 animate-fade-up rounded-xl border p-4 ${g.type === "BOUNCED" ? "border-amber-300 bg-amber-50/80" : "border-slate-200 bg-white shadow-sm"}`}>
               <h2 className={sectionTitle}>{g.title} <span className="font-normal text-slate-500">({byType(g.type).length})</span></h2>
-              <p className="mb-2 text-sm text-slate-700">{g.hint}</p>
+              <div className="mb-2"><Alert title={`${g.title}: ${vendorsIn(g.type)}`} tone={g.type === "BOUNCED" ? "amber" : "rose"}>{g.hint}</Alert></div>
               {g.type === "INVALID_EMAIL"
                 ? <ResultsTable rows={byType(g.type)} caption={`${g.title}: ${byType(g.type).length} rows`} extraHeader="Fix email"
                     extra={(r) => r.vendor_id !== null && byType(g.type).find((x) => x.vendor_id === r.vendor_id) === r

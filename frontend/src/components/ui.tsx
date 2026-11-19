@@ -77,6 +77,27 @@ export const ErrorBox = ({ error }: { error: unknown }) => (
   </p>
 );
 
+type Issue = { sheet: string; row: number; message: string; rejected: boolean };
+
+/** Identical alerts collapse into one line with a count and the first few places they occur, so a repeated problem shows once. */
+export function groupIssues(issues: Issue[]) {
+  const by = new Map<string, { message: string; rejected: boolean; where: string[]; count: number }>();
+  for (const i of issues) {
+    const g = by.get(`${i.rejected}|${i.message}`) ?? { message: i.message, rejected: i.rejected, where: [], count: 0 };
+    g.count++;
+    if (g.where.length < 5) g.where.push(`${i.sheet} row ${i.row}`);
+    by.set(`${i.rejected}|${i.message}`, g);
+  }
+  return [...by.values()];
+}
+
+/** A bold alert line: the headline in bold, the explanation after it. */
+export const Alert = ({ title, children, tone = "rose" }: { title: string; children?: ReactNode; tone?: "rose" | "amber" }) => (
+  <p role="alert" className={`rounded-xl border px-3 py-2 text-sm ${tone === "rose" ? "border-rose-300 bg-rose-50 text-rose-900" : "border-amber-300 bg-amber-50 text-amber-950"}`}>
+    <b className="font-bold">⚠ {title}</b>{children && <> {children}</>}
+  </p>
+);
+
 export function Pager({ offset, limit, total, onChange }: { offset: number; limit: number; total: number; onChange: (offset: number) => void }) {
   if (total === 0) return null;
   const to = Math.min(offset + limit, total);

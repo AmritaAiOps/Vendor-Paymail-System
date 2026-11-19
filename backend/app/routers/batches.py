@@ -12,9 +12,8 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.contract import ResultStatus
-from app.ingest.columns import COLUMNS
 from app import vendor_list
-from app.ingest import BATCH_KINDS, FILE_KINDS, DuplicateUpload, FileError, NoVendorList, detect_kind, ingest_batch
+from app.ingest import BATCH_KINDS, FILE_KINDS, DuplicateUpload, FileError, NoVendorList, attach_bank, detect_kind, ingest_batch
 from app.ingest.clean import clean_str
 from app.models import ConsolidatedEntry, ReconciliationResult, UploadBatch, get_db
 from app.reconcile import reconcile_batch
@@ -85,28 +84,47 @@ def _check_upload(kind: str, upload: UploadFile, password: str | None = None) ->
     return {"file": kind, "message": problem} if problem else (name, data)
 
 
-# One made-up row per file kind, by field name: what the sample downloads show under the real headers
+# The real file layouts (reference files/3): every column in order, with one made-up row. Values left out stay blank.
+_N = "Sample Vendor Pvt Ltd"
+_UTR = "UTIBR52026080112345"
 _SAMPLE = {
-    "consolidated": dict(vendor_name="Sample Vendor Pvt Ltd", utr="UTIBR52026080112345", invoice_no="INV-1001", po_no="PO-77",
-                         grn_no="GRN-5", invoice_amount=118000, cheque_amount=117000, debit_note=0, diff=1000, transaction_date="2026-08-05"),
-    "bank": dict(value_date="2026-08-05", utr="UTIBR52026080112345", debit=117000,
-                 description="NEFT DR-UTIBR52026080112345-SAMPLE VENDOR PVT LTD-UTIB0000001-INV-1001"),
-    "gdn": dict(gdn_date="2026-08-03", vendor_name="Sample Vendor Pvt Ltd", voucher_no="GDN/001", invoice_no="INV-1001",
-                amount=1000, reason="Short supply", pan="29ABCDE1234F1Z5"),
-    "tds": dict(vendor_name="Sample Vendor Pvt Ltd", invoice_no="INV-1001", invoice_date="2026-07-20", pan="ABCDE1234F", tds_amount=1000),
-    "vendors": dict(party_name="Sample Vendor Pvt Ltd", email="accounts@samplevendor.com", pan="29ABCDE1234F1Z5", email_2=""),
+    "consolidated": ("Sl NO:|Date of Entry|recordType|codTranId|brnCode|remitAccountType|remitAccountNo|remitterName|chqNo|remitAmount|"
+                     "benefIfscCode|benefAccountType|benefAccountNo|benefName|origDetail1|Narration 1 |Narration 2- Invoice No|Narration 3- PO No|"
+                     "Narration4 - PO Dt|GRN NO:|Cheque Number|Cheque Date|Cheque Amount|Invoice Amount|Debit Note|Diff|Transaction Date|UTR NO:",
+                     ["116_SEPL_2026-27_PHY", "2026-08-05", "196", "11", "026005300009051", "", "504563", "Sudhamayi Enterprises Pvt Ltd",
+                      "", 117000, "UTIB0000001", "11", "917020012345678", _N, "Axis Bank", "Phy Invoice", "INV-1001", "SE/PH/2026-27/77",
+                      "2026-07-20", "SE/PH/GRN/26/5", "504563", "2026-08-05", 117000, 118000, 0, 1000, "2026-08-05", _UTR]),
+    "bank": ("TransactionDate|ValueDate|Description|CreditDebitFlag|AmountInAccountCurrency|RunningTotal|TaskLiteral|ChequeNumber|"
+             "OriginatingBranch|TxnClickDisplay",
+             ["05/08/2026", "05/08/2026", f"NEFT DR-{_UTR}-{_N.upper()}-UTIB0000001-INV-1001", "D", 117000, 40811733.2, "MSD",
+              "000000504563", "996", ""]),  # the UTR is read from the description
+    "gdn": ("Date|Particulars|Voucher Type|Voucher No.|Voucher Ref. No.|Voucher Ref. Date|GSTIN/UIN|Narration|Gross Total|"
+            "Purchase PHA Local - GST 05%|Input CGST|Input SGST|Purchase Invoice Rounding Off",
+            ["2026-08-03", _N, "Debit Note", "GDN/001", "INV-1001", "2026-07-20", "29ABCDE1234F1Z5",
+             "GDN return deduction against invoice INV-1001: short supply", 1000, 952.38, 23.81, 23.81, 0]),
+    "tds": ("S.NO:|FY|Qtr|Month|PARTY NAME|PAN OF DEDUCTEE|HEAD OF EXPENSE|TDS SECTION CODE|NATURE OF PAYMENT|Narration|Division|"
+            "Journal voucher No|Purchase  voucher Date|Inv No|Inv Date|INVOICE Taxable VALUE|TDS Rate|TDS |TDS |Total TDS|"
+            "DATE OF DEDUCTION OF TDS|TDS CHEQUE NO:|TDS CHEQUE DATE|Cheque Amount|BANK NAME|BSR NO|Challan Sr no|Challan Date|"
+            "Challan Amount|Challan Date|Due Date|No of Days Delay|No Of mth delay|Interest @ 1% for delay|Interest Amt|Remarks|"
+            "Service tax registration No|Certificate received|Challan Status (whether soft copy received)|Challan|Certificate Number|"
+            "TDS Sl No: PHA|Journal Entry StatusY/N",
+            [1, "2026-27", "Q1", "2026-08-05", _N, "ABCDE1234F", "", "", "", "", "Pharmacy", "", "2026-08-05", "INV-1001",
+             "2026-07-20", 1000000, 0.001, 1000, 1000, 1000]),
+    "vendors": ("S.No|Vendor Name|Mode of Business|State|GSTIN/UIN|Contact Person Name|Contact NO.|Email ID|Contact Person Name.2|"
+                "Contact NO. 2|Email ID- Contact 2|Status (MSME)",
+                [1, _N, "Vendor", "Delhi", "29ABCDE1234F1Z5", "A. Kumar", "9999999999", "accounts@samplevendor.com", "NA", "NA", "NA", ""]),
 }
 
 
 @router.get("/sample/{kind}.xlsx")
 def sample(kind: str):
-    """The expected layout of one upload file: the real column headers and one made-up row."""
-    if kind not in COLUMNS:
+    """The expected layout of one upload file: the real column headers, in order, and one made-up row."""
+    if kind not in _SAMPLE:
         raise HTTPException(404, f"Unknown file kind {kind}")
-    fields = COLUMNS[kind]
+    headers, row = _SAMPLE[kind]
     wb = openpyxl.Workbook()
-    wb.active.append([names[0] for names in fields.values()])
-    wb.active.append([_SAMPLE[kind].get(f, "") for f in fields])
+    wb.active.append(headers.split("|"))
+    wb.active.append(row)
     out = io.BytesIO()
     wb.save(out)
     return StreamingResponse(io.BytesIO(out.getvalue()), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -125,17 +143,17 @@ def detect(files: list[UploadFile]):
 
 
 @router.post("", status_code=201, response_model=BatchOut)
-def upload(consolidated: UploadFile, bank: UploadFile, gdn: UploadFile, tds: UploadFile,
+def upload(consolidated: UploadFile, gdn: UploadFile, tds: UploadFile, bank: UploadFile | None = None,
            consolidated_password: _Password = None, bank_password: _Password = None, gdn_password: _Password = None,
            tds_password: _Password = None, db: Session = Depends(get_db)):
-    """The four per-run files; the vendors list is not part of the upload, it is the stored one (/api/vendor-list).
+    """The per-run files (the bank statement may be left out if it hasn't arrived: add it later with POST /{id}/bank); the vendors list is not part of the upload, it is the stored one (/api/vendor-list).
     422 detail = [{"file": kind, "message": ...}] covering every problem in every file; nothing is stored.
     A protected file without its <kind>_password (or with a wrong one) adds "password_required": true.
     409 if files with exactly the same rows were uploaded before against the same vendors list (the message names that
     batch); 409 if no vendors list is stored yet (upload one first)."""
     checked = {k: _check_upload(k, u, p) for k, u, p in zip(
         BATCH_KINDS, (consolidated, bank, gdn, tds),
-        (consolidated_password, bank_password, gdn_password, tds_password))}
+        (consolidated_password, bank_password, gdn_password, tds_password)) if u is not None}
     problems = [c for c in checked.values() if isinstance(c, dict)]
     if not problems:
         try:
@@ -169,10 +187,28 @@ def summary(id: int, db: Session = Depends(get_db)):
                         files=batch.ingest_report or {})
 
 
+@router.post("/{id}/bank", response_model=BatchSummary)
+def add_bank(id: int, bank: UploadFile, bank_password: _Password = None, db: Session = Depends(get_db)):
+    """Attach the bank statement to a batch uploaded without one, then call POST /{id}/reconcile. 409 if it already has
+    one; 422 detail like upload; 404 if no batch."""
+    _batch(db, id)
+    checked = _check_upload("bank", bank, bank_password)
+    if isinstance(checked, dict):
+        raise HTTPException(422, [checked])
+    try:
+        attach_bank(db, id, *checked)
+    except FileError as e:
+        raise HTTPException(422, e.problems)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return summary(id, db)
+
+
 @router.post("/{id}/reconcile", response_model=BatchSummary)
 def reconcile(id: int, db: Session = Depends(get_db)):
     """Reconcile every invoice of the batch (re-runnable) against the stored vendors list, queue the emails, return the new counts."""
-    _batch(db, id)
+    if not _batch(db, id).bank_file:
+        raise HTTPException(409, "This batch has no bank statement yet. Add it first (POST /api/batches/{id}/bank).")
     if vendor_list.current(db) is None:
         raise HTTPException(409, str(NoVendorList()))
     reconcile_batch(db, id)

@@ -4,7 +4,7 @@ import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom"
 import { ErrorBox, Logo, Spinner, btn, card, focusRing, pageTitle } from "./components/ui";
 import { auth } from "./firebase";
 import { useAuth } from "./lib/useAuth";
-import { ExitGuardProvider, MissingUtrNotice, useExitGuard } from "./components/ExitGuard";
+import { ExitGuardProvider, MissingBankNotice, MissingUtrNotice, useExitGuard } from "./components/ExitGuard";
 import Login from "./pages/Login";
 
 import EmailHistory from "./pages/EmailHistory";
@@ -132,7 +132,7 @@ export default function App() {
           <UserMenu email={me.data.email} isAdmin={me.data.is_admin} />
         </div>
       </header>
-      <div className="px-3 sm:px-4"><MissingUtrNotice /></div>
+      <div className="px-3 sm:px-4"><MissingBankNotice /><MissingUtrNotice /></div>
       <main id="main" className="mx-auto max-w-[110rem] px-3 py-6 sm:px-4">
         {/* keyed on the path so every page change replays the entrance animation */}
         <div key={pathname} className="animate-fade-up">

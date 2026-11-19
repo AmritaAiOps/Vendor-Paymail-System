@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 import { ApiError, api, downloadUrl, type VendorListStatus, type VendorPreview, type VendorRow } from "../api/client";
 import { formatDateTime } from "../lib/format";
-import { Badge, DownloadLink, ErrorBox, Loading, Modal, Spinner, btn, btnPrimary, card, focusRing, input, sectionTitle, td, th } from "./ui";
+import { Badge, DownloadLink, ErrorBox, Loading, Modal, Spinner, btn, btnPrimary, card, focusRing, groupIssues, input, sectionTitle, td, th } from "./ui";
 
 export const VENDOR_LIST_KEY = ["vendor-list"] as const;
 export const useVendorListStatus = () => useQuery({ queryKey: VENDOR_LIST_KEY, queryFn: api.vendorListStatus });
@@ -373,11 +373,11 @@ function ReuploadModal({ status, onClose }: { status: VendorListStatus | undefin
             rows={p.changed.map((c) => [c.party_name === c.old_party_name ? c.party_name : `${c.old_party_name} → ${c.party_name}`, c.old_email ?? "", c.new_email ?? ""])} />
           {p.issues.length > 0 && (
             <details className="mt-3 text-sm">
-              <summary className={`cursor-pointer ${focusRing}`}>{p.issues.length} row{p.issues.length > 1 ? "s" : ""} to check in the file</summary>
+              <summary className={`cursor-pointer ${focusRing}`}><b className="text-amber-800">{p.issues.length} row{p.issues.length > 1 ? "s" : ""} to check in the file</b></summary>
               <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-600">
-                {p.issues.slice(0, 50).map((i, n) => <li key={n}>{i.sheet} row {i.row}: {i.message} <span className="text-slate-400">({i.rejected ? "skipped" : "kept, email flagged"})</span></li>)}
+                {groupIssues(p.issues).slice(0, 50).map((i, n) => <li key={n}><b className="text-slate-900">{i.message}</b>{i.count > 1 && <b> ×{i.count}</b>} <span className="text-slate-500">({i.where.join(", ")}{i.count > i.where.length && ", …"}; {i.rejected ? "skipped" : "kept, email flagged"})</span></li>)}
               </ul>
-              {p.issues.length > 50 && <p className="mt-1 text-slate-500">…and {p.issues.length - 50} more.</p>}
+              {groupIssues(p.issues).length > 50 && <p className="mt-1 text-slate-500">…and {groupIssues(p.issues).length - 50} more.</p>}
             </details>
           )}
 

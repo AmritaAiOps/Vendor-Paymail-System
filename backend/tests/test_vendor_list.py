@@ -237,7 +237,7 @@ def reconciled_special_cases(client):
 
 
 def test_pending_summary_lists_scheduled_mails_with_time_and_missing_utrs(client, db):
-    assert client.get("/api/email-queue/pending-summary").json() == {"total": 0, "missing_utr_mails": 0, "missing_utr_invoices": 0, "items": []}
+    assert client.get("/api/email-queue/pending-summary").json() == {"total": 0, "missing_utr_mails": 0, "missing_utr_invoices": 0, "missing_bank_batches": 0, "missing_bank_batch_id": None, "items": []}
     reconciled_special_cases(client)
     s = client.get("/api/email-queue/pending-summary").json()
     assert s["total"] == len(s["items"]) == db.query(EmailQueue).filter(EmailQueue.status == "PENDING").count() > 0

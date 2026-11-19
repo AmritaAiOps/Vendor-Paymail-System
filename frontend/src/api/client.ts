@@ -127,7 +127,7 @@ export type VendorHistory = {
   vendor_count: number; added: number; removed: number; changed: number; details: { added?: string[]; removed?: string[]; changed?: string[] } | null;
 };
 export type PendingMail = { id: number; vendor_id: number; vendor_name: string; invoice_count: number; send_on_date: string; scheduled_at: string; missing_utr_count: number };
-export type PendingSummary = { total: number; missing_utr_mails: number; missing_utr_invoices: number; items: PendingMail[] };
+export type PendingSummary = { total: number; missing_utr_mails: number; missing_utr_invoices: number; missing_bank_batches: number; missing_bank_batch_id: number | null; items: PendingMail[] };
 export type SendAllOut = { sent: number; failed: number; dry_run: number; not_sent: number; held: number; already_done: number };
 
 /** The files uploaded for every run. The vendors list is not one of them: it is stored once (see api.vendorList*). */
@@ -140,11 +140,18 @@ export const api = {
   health: () => get<{ status: string }>("/health"),
   me: () => get<MeOut>("/auth/me"),
   /** passwords: only for password-protected files, sent as <field>_password. */
-  uploadBatch: (files: Record<UploadField, File>, passwords: Partial<Record<UploadField, string>>, onProgress: (pct: number) => void) => {
+  uploadBatch: (files: Partial<Record<UploadField, File>>, passwords: Partial<Record<UploadField, string>>, onProgress: (pct: number) => void) => {
     const form = new FormData();
-    UPLOAD_FIELDS.forEach((f) => form.append(f, files[f]));
-    UPLOAD_FIELDS.forEach((f) => passwords[f] && form.append(`${f}_password`, passwords[f]!));
+    UPLOAD_FIELDS.forEach((f) => files[f] && form.append(f, files[f]!));
+    UPLOAD_FIELDS.forEach((f) => files[f] && passwords[f] && form.append(`${f}_password`, passwords[f]!));
     return upload<BatchOut>("/batches", form, onProgress);
+  },
+  /** For a batch uploaded without its bank statement; reconcile afterwards. */
+  addBank: (id: number, file: File, password?: string) => {
+    const form = new FormData();
+    form.append("bank", file);
+    if (password) form.append("bank_password", password);
+    return upload<BatchSummary>(`/batches/${id}/bank`, form, () => {});
   },
   /** Which slot each file belongs to, by its column headers; null = can't tell. */
   detectFiles: (files: File[]) => {

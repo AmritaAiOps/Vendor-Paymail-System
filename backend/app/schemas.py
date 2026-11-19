@@ -264,6 +264,8 @@ class PendingSummaryOut(BaseModel):
     total: int
     missing_utr_mails: int  # pending emails whose vendor has at least one invoice with no UTR
     missing_utr_invoices: int  # all invoices with no UTR (latest result per invoice), whether or not the vendor has a mail
+    missing_bank_batches: int  # batches uploaded without a bank statement and not reconciled: the daily "upload it" notice
+    missing_bank_batch_id: int | None  # the newest of them: the Upload page opens it so the statement can be added next day
     items: list[PendingMailOut]
 
 
