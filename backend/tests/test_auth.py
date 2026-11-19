@@ -80,3 +80,10 @@ def test_no_project_fails_closed(api, monkeypatch):
     monkeypatch.setattr(config, "FIREBASE_PROJECT_ID", "")
     assert _get(api, ADMIN).status_code == 503
     assert _get(api, None, "/api/health").status_code == 200
+
+
+def test_no_role_lists_means_every_verified_firebase_user_is_admin(api, monkeypatch):
+    monkeypatch.setattr(config, "ALLOWED_EMAIL_DOMAIN", "")
+    monkeypatch.setattr(config, "ADMIN_EMAILS", set())
+    assert _get(api, "anyone@elsewhere.com").json() == {"email": "anyone@elsewhere.com", "is_admin": True}
+    assert _get(api, "anyone@elsewhere.com|unverified").status_code == 403  # still needs a verified email

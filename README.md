@@ -84,7 +84,7 @@ Secrets come only from the environment (`.env`, never committed). The settings p
 | `HISTORY_XLSX_PATH` | `./data/email_history.xlsx` | Set by `docker-compose.prod.yml` to the `appdata` volume |
 | `FIREBASE_PROJECT_ID` | none (required) | Firebase project whose ID tokens the API accepts. Empty = every route but health answers 503 |
 | `ALLOWED_EMAIL_DOMAIN` | empty | Verified emails at this domain (no `@`) can sign in as viewers |
-| `ADMIN_EMAILS` | empty | Comma-separated. Admins can also run the send job now, rebuild the history file and change settings |
+| `ADMIN_EMAILS` | empty | Comma-separated. Admins can also run the send job now, rebuild the history file and change settings. With this and `ALLOWED_EMAIL_DOMAIN` both empty, every verified user in the Firebase project is an admin: turn off self sign-up in the console (Authentication → Settings → User actions) |
 | `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID` | none (required) | Firebase web app config (public). Baked into the frontend at build time: rebuild `web` after changing |
 
 ## Operations runbook

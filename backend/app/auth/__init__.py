@@ -1,5 +1,6 @@
 """Firebase login: every /api route except health depends on require_viewer (main.py); admin routes on require_admin.
-Owner: Person A. Firebase is the user store; ADMIN_EMAILS / ALLOWED_EMAIL_DOMAIN (env) are the roles."""
+Owner: Person A. Firebase is the user store; ADMIN_EMAILS / ALLOWED_EMAIL_DOMAIN (env) are the roles. Both empty =
+every verified user of the Firebase project is an admin (turn off self sign-up in the Firebase console)."""
 import functools
 
 import firebase_admin
@@ -40,7 +41,8 @@ def require_viewer(request: Request) -> MeOut:
     except (ValueError, auth.InvalidIdTokenError):  # Expired/Revoked are InvalidIdTokenError subclasses
         raise HTTPException(401, "Sign-in expired or invalid", headers=_UNAUTHORIZED)
     email = (claims.get("email") or "").strip().lower()
-    is_admin = email in config.ADMIN_EMAILS
+    # Both lists empty: the Firebase project's user list is the access list, every verified user there is an admin.
+    is_admin = email in config.ADMIN_EMAILS or not (config.ADMIN_EMAILS or config.ALLOWED_EMAIL_DOMAIN)
     in_domain = bool(config.ALLOWED_EMAIL_DOMAIN) and email.endswith("@" + config.ALLOWED_EMAIL_DOMAIN)
     if not email or not claims.get("email_verified") or not (is_admin or in_domain):
         raise HTTPException(403, "Your account is not allowed to use this app")
